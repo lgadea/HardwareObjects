@@ -1,4 +1,3 @@
-from HardwareRepository import HardwareRepository
 
 import logging
 import time
@@ -6,11 +5,10 @@ import time
 from HardwareRepository.BaseHardwareObjects import Device
 from HardwareRepository.Command.Tango import TangoCommand
 
-from PyTango import DeviceProxy
+from PyTango.gevent import DeviceProxy
 
 from qt import qApp
-
-import numpy
+import gevent
 
 class TangoDCMotor(Device):
     
@@ -47,13 +45,10 @@ class TangoDCMotor(Device):
 
         self.old_value = 0.
         self.tangoname = self.getProperty("tangoname")
-        self.motor_name = self.getProperty("motor_name")
-        self.ho = DeviceProxy(self.tangoname)
-        
+
         try:
             self.dataType    = self.getProperty("datatype")
-            if self.dataType is None:
-                self.dataType    = "float"
+            #logging.getLogger("HWR").info("TangoDCMotor dataType found in config, it is %s", self.dataType)
         except:
             self.dataType    = "float"
 
@@ -64,10 +59,7 @@ class TangoDCMotor(Device):
                pass
 
         self.setIsReady(True)
-        try:
-            self.limitsCommand = self.getCommandObject("limits")
-        except KeyError:
-            self.limitsCommand = None
+
         self.positionChan = self.getChannelObject("position") # utile seulement si positionchan n'est pas defini dans le code
         self.stateChan    = self.getChannelObject("state")    # utile seulement si statechan n'est pas defini dans le code
 
@@ -76,9 +68,8 @@ class TangoDCMotor(Device):
 
     def positionChanged(self, value):
         self.positionValue = value
-        if abs(float(value) - self.old_value ) > self.threshold:
+        if abs(value - self.old_value ) > self.threshold:
             try:
-                #logging.getLogger("HWR").error("%s: TangoDCMotor new position  , %s", self.name(), value)
                 self.emit('positionChanged', (value,))
                 self.old_value = value
             except:
@@ -102,40 +93,32 @@ class TangoDCMotor(Device):
     
     def motorStateChanged(self, state):
         self.stateValue = str(state)
+        self.stateValue = str(self.stateChan.getValue())
+        if self.stateValue not in ["RUNNING","MOVING"]:
+            position = self.positionChan.getValue()
+            self.positionChanged(position)
+
         self.setIsReady(True)
-        logging.info("motor state changed. it is %s " % self.stateValue)
         self.emit('stateChanged', (TangoDCMotor.stateDict[self.stateValue], ))
         
     def getState(self):
-        state = self.stateValue
+        #state = self.stateValue
         return TangoDCMotor.stateDict[self.stateValue]
     
     def getLimits(self):
         try:
-            logging.getLogger("HWR").info("TangoDCMotor.getLimits: trying to get limits for motor_name %s " % (self.motor_name))
-            limits = self.ho.getMotorLimits(self.motor_name) #limitsCommand() # self.ho.getMotorLimits(self.motor_name)
-            logging.getLogger("HWR").info("TangoDCMotor.getLimits: Getting limits for %s -- %s " % (self.motor_name, str(limits)))
-            if numpy.inf in limits:
-                limits = numpy.array([-10000, 10000])
+            info = self.positionChan.getInfo() 
+            max = float(info.max_value)
+            min = float(info.min_value)
+            return [min,max]
         except:
-            import traceback
-            #logging.getLogger("HWR").info("TangoDCMotor.getLimits: Cannot get limits for %s.\nException %s " % (self.motor_name, traceback.print_exc()))
-            limits = None
-            
-        if limits is None:
-            try:
-                limits = self.getProperty('min'), self.getProperty('max')
-                logging.getLogger("HWR").info("TangoDCMotor.getLimits: %.4f %.4f" % limits)
-                limits = numpy.array(limits)
-            except:
-                #logging.getLogger("HWR").info("TangoDCMotor.getLimits: Cannot get limits for %s" % self.name())
-                limits = None
-        return limits
+            return [-1,1]
         
     def motorLimitsChanged(self):
         self.emit('limitsChanged', (self.getLimits(), )) 
         
     def motorIsMoving(self):
+        self.stateValue = str(self.stateChan.getValue())
         return( self.stateValue == "RUNNING" or self.stateValue == "MOVING" )
 
     def motorMoveDone(self, channelValue):
@@ -148,9 +131,6 @@ class TangoDCMotor(Device):
     def syncQuestionAnswer(self, specSteps, controllerSteps):
         return '0' # This is only for spec motors. 0 means do not change anything on sync
     
-    def getRealPosition(self):
-        return self.positionChan.getValue()
-    
     def getPosition(self):
         pos = self.positionValue
         return pos
@@ -159,11 +139,10 @@ class TangoDCMotor(Device):
         return self.getPosition()
     
     def syncMove(self, position):
-        prev_position      = self.getPosition()
-        #self.positionValue = position
-        relative_position = position - prev_position
-        self.syncMoveRelative(relative_position)
-        time.sleep(0.2) # allow MD2 to change the state
+        #prev_position      = self.getPosition()
+        self.positionValue = position
+
+        time.sleep(0.5) # allow MD2 to change the state
         while self.stateValue == "RUNNING" or self.stateValue == "MOVING": # or self.stateValue == SpecMotor.MOVESTARTED:
             qApp.processEvents(100)
 
@@ -181,7 +160,7 @@ class TangoDCMotor(Device):
         retvalue = value
         if self.dataType in [ "short", "int", "long"]:
             retvalue = int(value)
-        return retvalue
+        return(retvalue)
 
     def syncMoveRelative(self, position):
         old_pos = self.positionValue
@@ -190,41 +169,33 @@ class TangoDCMotor(Device):
         self.positionChan.setValue( self.convertValue(self.positionValue) )
 
         dev = DeviceProxy(self.tangoname)
-        time.sleep(0.2) # allow MD2 to change the state
+        #gevent.sleep(0.5) # allow MD2 to change the state
 
         mystate = str( dev.State() )
         logging.info("TangoDCMotor: %s syncMoveRelative state is %s / %s " % ( self.tangoname, str( self.stateValue ), mystate))
 
         while mystate == "RUNNING" or mystate == "MOVING":
             logging.info("TangoDCMotor: syncMoveRelative is moving %s" % str( mystate ))
-            time.sleep(0.1)
+            gevent.sleep(0.03)
             mystate = str( dev.State() )
-            qApp.processEvents(100)
+            #qApp.processEvents(100)
         
     def getMotorMnemonic(self):
         return self.name()
-    
-    def move(self, absolutePosition, epsilon=0., sync=False):
+
+    def move(self, absolutePosition):
         """Move the motor to the required position
 
         Arguments:
         absolutePosition -- position to move to
         """
-        logging.getLogger("TangoClient").info("TangoDCMotor move (%s). Trying to go to %s: type '%s'", self.motor_name, absolutePosition, type(absolutePosition))
-        absolutePosition = float(absolutePosition)
+        logging.getLogger("TangoClient").info("-------------------- TangoDCMotor move (%s). Trying to go to %s" % (self.tangoname, absolutePosition))
         if type(absolutePosition) != float and type(absolutePosition) != int:
-            logging.getLogger("TangoClient").error("Cannot move %s: position '%s' is not a number. It is a %s", self.tangoname, absolutePosition, type(absolutePosition))
-        logging.info("TangoDCMotor: move. motor will go to %s " % str(absolutePosition))   
-        logging.getLogger("HWR").info("TangoDCMotor.move to absolute position: %.3f" % absolutePosition)
-        logging.getLogger("TangoClient").info("TangoDCMotor move. Trying to go to %s: that is a '%s'", absolutePosition, type(absolutePosition))
-        if abs(self.getPosition() - absolutePosition) > epsilon:
-            logging.info("TangoDCMotor: difference larger then epsilon (%s), executing the move " % str(epsilon))
-            self.positionChan.setValue( self.convertValue(absolutePosition) )
+            self.positionChan.setValue(self.convertValue(absolutePosition))
         else:
-            logging.info("TangoDCMotor: not moving really as epsilon is large %s " % str(epsilon))
-            logging.info("TangoDCMotor: self.getPosition() %s " % str(self.getPosition()))
-            logging.info("TangoDCMotor: absolutePosition %s " % str(absolutePosition))
-            
+            self.positionChan.setValue(absolutePosition)
+        logging.getLogger("TangoClient").info("-------------------- TangoDCMotor move. done")
+
     def stop(self):
         logging.getLogger("HWR").info("TangoDCMotor.stop")
         stopcmd = self.getCommandObject("Stop")()
@@ -236,16 +207,3 @@ class TangoDCMotor(Device):
         logging.getLogger().debug("%s: TangoDCMotor.isSpecConnected()" % self.name())
         return TruehardwareObjectName,
     
-def test():
-    import os
-    hwr_directory = os.environ["XML_FILES_PATH"]
-
-    hwr = HardwareRepository.HardwareRepository(os.path.abspath(hwr_directory))
-    hwr.connect()
-
-    motor = hwr.getHardwareObject("/phi")
-    print motor.getPosition()
-
-if __name__ == '__main__':
-    test()
-

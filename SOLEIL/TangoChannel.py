@@ -20,7 +20,4 @@ class TangoChannel(BaseHardwareObjects.Device):
         #
         # emit signal
         #
-        #self.emit('valueChange', value)
         self.emit('valueChanged', value)
-
-

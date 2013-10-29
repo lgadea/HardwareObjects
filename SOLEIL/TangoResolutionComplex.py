@@ -41,8 +41,7 @@ class TangoResolutionComplex(BaseHardwareObjects.Equipment):
          "STANDBY": 2,
          "RUNNING": 4,
          "MOVING":  4,
-         "2":       2,
-         "1":       1}
+         "2":       2}
    
     
     def _init(self):
@@ -117,13 +116,9 @@ class TangoResolutionComplex(BaseHardwareObjects.Equipment):
         self.emit("deviceNotReady")
         
 
-    def get_value(self):
-        return self.getPosition()
-        
-
     def getPosition(self):
-        #if self.currentResolution is None:
-        self.recalculateResolution()
+        if self.currentResolution is None:
+            self.recalculateResolution()
         return self.currentResolution
 
     def energyChanged(self, energy):
@@ -170,10 +165,7 @@ class TangoResolutionComplex(BaseHardwareObjects.Equipment):
     def stateChanged(self, state):
         #logging.getLogger("HWR").debug("%s: TangoResolution.stateChanged: %s"\
         #                                            % (self.name(), state))
-        try:
-            self.emit('stateChanged', (TangoResolutionComplex.stateDict[str(state)], ))
-        except KeyError:
-            self.emit('stateChanged', (TangoResolutionComplex.stateDict['UNKNOWN'], )) #ms 2015-03-26 trying to get rid of the fatal error with connection to detector ts motor
+        self.emit('stateChanged', (TangoResolutionComplex.stateDict[str(state)], ))
 
 
     def getLimits(self, callback=None, error_callback=None):
@@ -245,25 +237,14 @@ class TangoResolutionComplex(BaseHardwareObjects.Equipment):
             self.__dist2resA2 = None
 
 
-    def move(self, res, mindist=114, maxdist=1000):
+    def move(self, res):
         self.currentWavelength = self.blenergyHO.getCurrentWavelength()
-        distance = self.res2dist(res)
-        if distance >= mindist and distance <= maxdist:
-            self.device.position = distance
-        elif distance < mindist:
-            logging.getLogger("user_level_log").warning("TangoResolution: requested resolution is above limit for specified energy, moving to maximum allowed resolution")
-            self.device.position = mindist
-        elif distance > maxdist:
-            logging.getLogger("user_level_log").warning("TangoResolution: requested resolution is below limit for specified energy, moving to minimum allowed resolution")
-            self.device.position = maxdist
-            
+        self.device.position = self.res2dist(res)
 
     def newDistance(self, dist):
         self.device.position = dist
 
-    def motorIsMoving(self):
-        return self.device.state().name in ['MOVING', 'RUNNING']
-        
+
     def stop(self):
         try:
             self.device.Stop()
@@ -273,9 +254,8 @@ class TangoResolutionComplex(BaseHardwareObjects.Equipment):
         
     def dist2res(self, Distance, callback=None, error_callback=None):
 
-        #Distance = float(Distance)# MS 2015-03-26 moving statement inside try loop
+        Distance = float(Distance)
         try:
-            Distance = float(Distance)
             #Wavelength = self.monodevice._SimpleDevice__DevProxy.read_attribute("lambda").value
             if self.currentWavelength is None:
                 self.currentWavelength = self.blenergyHO.getCurrentWavelength()

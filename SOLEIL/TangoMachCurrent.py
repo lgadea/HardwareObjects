@@ -23,15 +23,11 @@ class TangoMachCurrent(Device):
 
     def updatedValue(self):
         try:
-            machstat = self.device.read_attribute('State')
-            if machstat.value.name == 'FAULT':
-                return -1,"","",0
-            else:
-                mach   = self.getCurrent()
-                lifetime = self.getLifeTime()
-                fillmode = self.getFillMode() + " filling"
-                opmsg  = self.getMessage()
-                return mach, opmsg, fillmode, lifetime
+           mach   = self.getCurrent()
+           lifetime = self.getLifeTime()
+           fillmode = self.getFillMode() + " filling"
+           opmsg  = self.getMessage()
+           return mach, opmsg, fillmode, lifetime
         except:
            return None
 

@@ -1,25 +1,36 @@
+<<<<<<< HEAD
 from HardwareRepository import HardwareRepository
+=======
+>>>>>>> Version at the end of Vicente intervention November 1st 2013
 from SOLEILMultiCollect import *
 import shutil
 import logging
 from PyTango import DeviceProxy
 import numpy
 import re
+<<<<<<< HEAD
 import math
+=======
+>>>>>>> Version at the end of Vicente intervention November 1st 2013
 
 class PX2MultiCollect(SOLEILMultiCollect):
     def __init__(self, name):
 
         SOLEILMultiCollect.__init__(self, name, LimaAdscDetector(), TunableEnergy())
         #SOLEILMultiCollect.__init__(self, name, DummyDetector(), TunableEnergy())
+<<<<<<< HEAD
         self.motors = ['sampx', 'sampy', 'phiz', 'phiy']
         
+=======
+
+>>>>>>> Version at the end of Vicente intervention November 1st 2013
     def init(self):
 
         logging.info("headername is %s" % self.headername )
 
         self.headerdev     = DeviceProxy( self.headername )
         self.mono1dev      = DeviceProxy( self.mono1name )
+<<<<<<< HEAD
         self.mono1_mt_rx   = DeviceProxy( self.mono1mtrxname )
         self.det_mt_ts_dev = DeviceProxy( self.detmttsname )
         self.det_mt_tx_dev = DeviceProxy( self.detmttxname )
@@ -55,6 +66,18 @@ class PX2MultiCollect(SOLEILMultiCollect):
             D = self.distance2()
             
         #X, Y = self.beamCenter()
+=======
+        self.det_mt_ts_dev = DeviceProxy( self.detmttsname )
+        self.det_mt_tx_dev = DeviceProxy( self.detmttxname )
+        self.det_mt_tz_dev = DeviceProxy( self.detmttzname )
+
+        self._detector.prepareHeader = self.prepareHeader
+        SOLEILMultiCollect.init(self)
+       
+    def prepareHeader(self):
+        '''Will set up header given the actual values of beamline energy, mono and detector distance'''
+        X, Y = self.beamCenter()
+>>>>>>> Version at the end of Vicente intervention November 1st 2013
 
         BeamCenterX = str(round(X, 3))
         BeamCenterY = str(round(Y, 3))
@@ -62,6 +85,7 @@ class PX2MultiCollect(SOLEILMultiCollect):
         head = re.sub('BEAM_CENTER_X=\d\d\d\.\d', 'BEAM_CENTER_X=' + BeamCenterX, head)
         head = re.sub('BEAM_CENTER_Y=\d\d\d\.\d', 'BEAM_CENTER_Y=' + BeamCenterY, head)
         return head
+<<<<<<< HEAD
     
     @task
     def move_motors(self, motor_position_dict, epsilon=0):
@@ -120,6 +144,8 @@ class PX2MultiCollect(SOLEILMultiCollect):
         d = X * theta.T
         
         return float(d)
+=======
+>>>>>>> Version at the end of Vicente intervention November 1st 2013
 
     def beamCenter(self):
         '''Will calculate beam center coordinates'''
@@ -147,6 +173,7 @@ class PX2MultiCollect(SOLEILMultiCollect):
         Origin = Origin * q
 
         return Origin[1] + zcor, Origin[0] + xcor
+<<<<<<< HEAD
         
     def get_beam_center_x(self, X):
         logging.info('beam_center_x calculation')
@@ -1057,4 +1084,7 @@ def test():
 
 if __name__ == '__main__':
    test()
+=======
+
+>>>>>>> Version at the end of Vicente intervention November 1st 2013
 

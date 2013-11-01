@@ -54,7 +54,6 @@ class ShapeHistory(HardwareObject):
         self._drawing_event = DrawingEvent(self)
         self.shapes = {}
         self.selected_shapes = {}
-        self.point_index = 0
 
     def set_drawing(self, drawing):
         """
@@ -65,11 +64,10 @@ class ShapeHistory(HardwareObject):
 
         :returns: None
         """
-        if self._drawing:
+        if self._drawing is not None:
             logging.getLogger('HWR').info('Setting previous drawing:' + \
                                           str(self._drawing) + ' to ' + \
                                           str(drawing))
-
         self._drawing = drawing
         self._drawing.addDrawingEvent(self._drawing_event)
 
@@ -161,18 +159,6 @@ class ShapeHistory(HardwareObject):
         """
         return self.shapes.values()
 
-    def get_points(self):
-        """
-        :returns: All points currently handled
-        """
-        current_points = []
-
-        for shape in self.get_shapes():
-            if isinstance(shape, Point):
-                current_points.append(shape)
-
-        return current_points
-        
     def add_shape(self, shape):
         """
         Adds the shape <shape> to the list of handled objects.
@@ -182,15 +168,10 @@ class ShapeHistory(HardwareObject):
 
         """
         self.shapes[shape] = shape
-        if isinstance(shape, Point):
-            shape.set_index(self.get_available_point_index())
 
+        logging.getLogger().debug("ShapeHistory. New shape added. %s" % str(shape))
         self.get_drawing_event_handler().de_select_all()
         self.get_drawing_event_handler().set_selected(shape, True, call_cb = True)
-
-    def get_available_point_index(self):
-        self.point_index += 1
-        return self.point_index
 
     def _delete_shape(self, shape):
         shape.unhighlight()
@@ -254,7 +235,6 @@ class ShapeHistory(HardwareObject):
             self._delete_shape(shape)
 
         self.shapes.clear()
-        self.point_index = 0
 
     def de_select_all(self):
         self._drawing_event.de_select_all()
@@ -301,7 +281,7 @@ class ShapeHistory(HardwareObject):
         return shape in self.selected_shapes
 
     def get_selected_shapes(self):
-        return list(self.selected_shapes.itervalues())
+        return self.selected_shapes.itervalues()
 
 
 class DrawingEvent(QubDrawingEvent):
@@ -346,22 +326,16 @@ class DrawingEvent(QubDrawingEvent):
         Checks if a shape is selected and 'moves to' the selected
         position.
         """
+        clicked_shape = None
         for shape in self.qub_helper.get_shapes():
             modifier = shape.get_hit(x, y)
 
             if modifier:
                 clicked_shape = shape
-                self.move_to_centred_position_cb(clicked_shape.\
-                                         get_centred_positions()[0])
                 break
-<<<<<<< HEAD
-
-=======
->>>>>>> fix bug exception reached when click out centring point
         if clicked_shape is not None :
             self.move_to_centred_position_cb(clicked_shape.\
                                          get_centred_positions()[0])
-
     def mousePressed(self, x, y):
         """
         Selects the shape the mouse is over when clicked, de selects
@@ -617,9 +591,6 @@ class Line(Shape):
     def get_qub_objects(self):
         return [self.start_qub_p, self.end_qub_p, self.qub_line]
 
-    def get_points_index(self):
-        if self.start_cpos and self.end_cpos:
-            return (self.start_cpos.get_index(), self.end_cpos.get_index())
 
 class Point(Shape):
     def __init__(self, drawing, centred_position, screen_pos):
@@ -633,16 +604,9 @@ class Point(Shape):
         else:
             self.centred_position = centred_position
         self.screen_pos = screen_pos
-        self.point_index = None
         self._drawing = drawing
 
         self.qub_point = self.draw(screen_pos)
-
-    def set_index(self, index):
-        self.point_index = index
-
-    def get_index(self):
-        return self.point_index
 
     def get_qub_point(self):
         return self.qub_point
@@ -698,16 +662,6 @@ class Point(Shape):
 
     def highlight(self):
         try:
-            if self.point_index:
-                text = "Point no. %d selected" % self.point_index
-                if self.centred_position is not None:
-                    if self.centred_position.kappa and self.centred_position.kappa_phi:
-                        text = "Point no. %d (kappa: %0.2f phi: %0.2f) selected" %(
-                               self.point_index,
-                               self.centred_position.kappa,
-                               self.centred_position.kappa_phi)  
-                self._drawing.setInfo(text)
-                self.qub_point.setLabel(str(self.point_index))
             highlighted_pen = qt.QPen(self.qub_point.\
                                        _drawingObjects[0].pen())
             highlighted_pen.setWidth(2)

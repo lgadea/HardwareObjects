@@ -64,9 +64,12 @@ class AttenuatorsPX2(Device):
         logging.getLogger().debug("AttenuatorsPX2: self.labels, self.bits, self.attno, %s, %s, %s" %( self.labels, self.bits, self.attno))
         
     def getAtteConfig(self):
+<<<<<<< HEAD
         pass
 
     def getAtteConfig_OLD(self):
+=======
+>>>>>>> Version at the end of Vicente intervention November 1st 2013
         logging.getLogger().debug("HOS Attenuator: passe dans getAtteConfig")
         self.attno = len( self['atte'] )
 

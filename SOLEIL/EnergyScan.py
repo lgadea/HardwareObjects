@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 from qt import *
 from HardwareRepository.BaseHardwareObjects import Equipment
-from HardwareRepository.TaskUtils import *
 import logging
 import PyChooch
 from matplotlib.figure import Figure
@@ -23,90 +22,25 @@ from PyTango import DeviceProxy
 import numpy
 import pickle
 
-<<<<<<< HEAD:SOLEIL/EnergyScanPX2.py-saved
-class EnergyScanPX2(Equipment):
-=======
 class EnergyScan(Equipment):
     
     MANDATORY_HO={"BLEnergy":"BLEnergy"}
     
     
->>>>>>> Version PX1 before update to 2.0.10:EnergyScan.py
     def init(self):
         self.scanning = None
-<<<<<<< HEAD:SOLEIL/EnergyScanPX2.py-saved
-        self.moving = None
-        self.energyMotor = None
-        self.energyScanArgs = None
-        self.archive_prefix = None
-        self.energy2WavelengthConstant=None
-        self.defaultWavelength=None
-        self._element = None
-        self._edge = None
-        try:
-            self.defaultWavelengthChannel=self.getChannelObject('default_wavelength')
-        except KeyError:
-            self.defaultWavelengthChannel=None
-        else:
-            self.defaultWavelengthChannel.connectSignal("connected", self.sConnected) 
-            self.defaultWavelengthChannel.connectSignal("disconnected", self.sDisconnected)
-
-        if self.defaultWavelengthChannel is None:
-            #MAD beamline
-            try:
-                self.energyScanArgs=self.getChannelObject('escan_args')
-            except KeyError:
-                logging.getLogger("HWR").warning('EnergyScan: error initializing energy scan arguments (missing channel)')
-                self.energyScanArgs=None
-
-            try:
-                self.scanStatusMessage=self.getChannelObject('scanStatusMsg')
-            except KeyError:
-                self.scanStatusMessage=None
-                logging.getLogger("HWR").warning('EnergyScan: energy messages will not appear (missing channel)')
-            else:
-                self.connect(self.scanStatusMessage,'update',self.scanStatusChanged)
-
-            try:
-                self.doEnergyScan.connectSignal('commandReplyArrived', self.scanCommandFinished)
-                self.doEnergyScan.connectSignal('commandBeginWaitReply', self.scanCommandStarted)
-                self.doEnergyScan.connectSignal('commandFailed', self.scanCommandFailed)
-                self.doEnergyScan.connectSignal('commandAborted', self.scanCommandAborted)
-                self.doEnergyScan.connectSignal('commandReady', self.scanCommandReady)
-                self.doEnergyScan.connectSignal('commandNotReady', self.scanCommandNotReady)
-            except AttributeError,diag:
-                logging.getLogger("HWR").warning('EnergyScan: error initializing energy scan (%s)' % str(diag))
-                self.doEnergyScan=None
-            else:
-                self.doEnergyScan.connectSignal("connected", self.sConnected)
-                self.doEnergyScan.connectSignal("disconnected", self.sDisconnected)
-
-            self.energyMotor=self.getObjectByRole("energy")
-            self.resolutionMotor=self.getObjectByRole("resolution")
-            self.previousResolution=None
-            self.lastResolution=None
-
-            self.dbConnection=self.getObjectByRole("dbserver")
-            if self.dbConnection is None:
-                logging.getLogger("HWR").warning('EnergyScan: you should specify the database hardware object')
-            self.scanInfo=None
-
-            self.transmissionHO=self.getObjectByRole("transmission")
-            if self.transmissionHO is None:
-                logging.getLogger("HWR").warning('EnergyScan: you should specify the transmission hardware object')
-=======
 #        self.moving = None
         self.scanThread = None
         self.pk = None
         self.ip = None
-        self.canScan = True
-        self.roiwidth = 0.3 # en keV largeur de la roi 
+        self.roiwidth = 0.35 # en keV largeur de la roi 
         self.before = 0.10  #  en keV Ecart par rapport au seuil pour le point de depart du scan
         self.after = 0.20   # en keV Ecart par rapport au seuil pour le dernier point du scan
+        self.canScan = True
         self.nbsteps = 100 #
         self.integrationtime = 5.0
-
         self.directoryPrefix = None
+
         self.directoryPrefix=self.getProperty("directoryprefix")
         if self.directoryPrefix is None:
             logging.getLogger("HWR").error("EnergyScan: you must specify the directory prefix property")
@@ -135,7 +69,7 @@ class EnergyScan(Equipment):
         self.before = paramscan.before
         self.after = paramscan.after
         self.nbsteps = paramscan.nbsteps
-        self.integrationtime = paramscan.integrationtime
+        self.integrationTime = paramscan.integrationtime
       
       
         print "self.roiwidth :", self.roiwidth
@@ -144,7 +78,6 @@ class EnergyScan(Equipment):
         print "self.nbsteps :", self.nbsteps
         print "self.integrationtime :", self.integrationtime
         
->>>>>>> Version PX1 before update to 2.0.10:EnergyScan.py
 
         self.dbConnection=self.getObjectByRole("dbserver")
         if self.dbConnection is None:
@@ -231,13 +164,6 @@ class EnergyScan(Equipment):
             self.canScan = False
 
         try:
-            self.guillotdevice = DeviceProxy(self.getProperty("guillot")) #, verbose=False)
-            self.guillotdevice.timeout = 2000
-        except :    
-            logging.getLogger("HWR").error("%s not found" %(self.getProperty("guillot")))
-            self.canScan = False
-
-        try:
             self.bstdevice = DeviceProxy(self.getProperty("bst")) #, verbose=False)
             self.bstdevice.timeout = 2000
         except :    
@@ -260,8 +186,7 @@ class EnergyScan(Equipment):
         
                             
     def isConnected(self):
-	return True
-        #return self.isSpecConnected()
+        return self.isSpecConnected()
         
     def isSpecConnected(self):
         logging.getLogger("HWR").debug('EnergyScan:isSpecConnected')
@@ -281,7 +206,6 @@ class EnergyScan(Equipment):
 
     # Energy scan commands
     def canScanEnergy(self):
-	return True
         logging.getLogger("HWR").debug('EnergyScan:canScanEnergy : %s' %(str(self.canScan)))
         return self.canScan
 
@@ -351,84 +275,6 @@ class EnergyScan(Equipment):
         self.scanning = False
         self.storeEnergyScan()
         self.emit('energyScanFailed', ())
-<<<<<<< HEAD:SOLEIL/EnergyScanPX2.py-saved
-        self.ready_event.set()
-    def scanCommandAborted(self, *args):
-        self.emit('energyScanFailed', ())
-        self.ready_event.set()
-    def scanCommandFinished(self,result, *args):
-        with cleanup(self.ready_event.set):
-            self.scanInfo['endTime']=time.strftime("%Y-%m-%d %H:%M:%S")
-            logging.getLogger("HWR").debug("EnergyScan: energy scan result is %s" % result)
-            self.scanning = False
-            if result==-1:
-                self.storeEnergyScan()
-                self.emit('energyScanFailed', ())
-                return
-
-            try:
-              t = float(result["transmissionFactor"])
-            except:
-              pass
-            else:
-              self.scanInfo["transmissionFactor"]=t
-            try:
-                et=float(result['exposureTime'])
-            except:
-                pass
-            else:
-                self.scanInfo["exposureTime"]=et
-            try:
-                se=float(result['startEnergy'])
-            except:
-                pass
-            else:
-                self.scanInfo["startEnergy"]=se
-            try:
-                ee=float(result['endEnergy'])
-            except:
-                pass
-            else:
-                self.scanInfo["endEnergy"]=ee
-
-            try:
-                bsX=float(result['beamSizeHorizontal'])
-            except:
-                pass
-            else:
-                self.scanInfo["beamSizeHorizontal"]=bsX
-
-            try:
-                bsY=float(result['beamSizeVertical'])
-            except:
-                pass
-            else:
-                self.scanInfo["beamSizeVertical"]=bsY
-
-            try:
-                self.thEdge=float(result['theoreticalEdge'])/1000.0
-            except:
-                pass
-
-            self.emit('energyScanFinished', (self.scanInfo,))
-
-
-    def doChooch(self, scanObject, elt, edge, scanArchiveFilePrefix, scanFilePrefix):
-        symbol = "_".join((elt, edge))
-        scanArchiveFilePrefix = "_".join((scanArchiveFilePrefix, symbol))
-
-        i = 1
-        while os.path.isfile(os.path.extsep.join((scanArchiveFilePrefix + str(i), "raw"))):
-            i = i + 1
-
-        scanArchiveFilePrefix = scanArchiveFilePrefix + str(i) 
-        archiveRawScanFile=os.path.extsep.join((scanArchiveFilePrefix, "raw"))
-        rawScanFile=os.path.extsep.join((scanFilePrefix, "raw"))
-        scanFile=os.path.extsep.join((scanFilePrefix, "efs"))
-
-        if not os.path.exists(os.path.dirname(scanArchiveFilePrefix)):
-            os.makedirs(os.path.dirname(scanArchiveFilePrefix))
-=======
         
     def scanCommandAborted(self):
         logging.getLogger("HWR").debug('EnergyScan:scanCommandAborted')
@@ -506,7 +352,6 @@ class EnergyScan(Equipment):
               
         elt = scanDesc['element']
         edge = scanDesc['edgeEnergy']
->>>>>>> Version PX1 before update to 2.0.10:EnergyScan.py
         
         try:
             pk, fppPeak, fpPeak, ip, fppInfl, fpInfl, chooch_graph_data = PyChooch.calc(scanData,
@@ -521,44 +366,8 @@ class EnergyScan(Equipment):
             logging.getLogger("HWR").info("Chooch failed badly")
             #, fppPeak, fpPeak, ip, fppInfl, fpInfl, chooch_graph_data = self.thEdge, 
             
-<<<<<<< HEAD:SOLEIL/EnergyScanPX2.py-saved
-            if scanObject is None:                
-                raw_data_file = os.path.join(os.path.dirname(scanFilePrefix), 'data.raw')
-                try:
-                    raw_file = open(raw_data_file, 'r')
-                except:
-                    self.storeEnergyScan()
-                    self.emit("energyScanFailed", ())
-                    return
-                
-                for line in raw_file.readlines()[2:]:
-                    (x, y) = line.split('\t')
-                    x = float(x.strip())
-                    y = float(y.strip())
-                    x = x < 1000 and x*1000.0 or x
-                    scanData.append((x, y))
-                    f.write("%f,%f\r\n" % (x, y))
-                    pyarch_f.write("%f,%f\r\n"% (x, y))
-            else:
-                for i in range(len(scanObject.x)):
-                    x = float(scanObject.x[i])
-                    x = x < 1000 and x*1000.0 or x 
-                    y = float(scanObject.y[i])
-                    scanData.append((x, y))
-                    f.write("%f,%f\r\n" % (x, y))
-                    pyarch_f.write("%f,%f\r\n"% (x, y)) 
-
-            f.close()
-            pyarch_f.close()
-            self.scanInfo["scanFileFullPath"]=str(archiveRawScanFile)
-
-        pk, fppPeak, fpPeak, ip, fppInfl, fpInfl, chooch_graph_data = PyChooch.calc(scanData, elt, edge, scanFile)
-        rm=(pk+30)/1000.0
-        pk=pk/1000.0
-=======
         rm = (pk + 50.) / 1000.0
         pk = pk / 1000.0
->>>>>>> Version PX1 before update to 2.0.10:EnergyScan.py
         savpk = pk
         ip = ip / 1000.0
         comm = ""
@@ -644,180 +453,6 @@ class EnergyScan(Equipment):
         self.emit('scanStatusChanged', (status,))
         
     def storeEnergyScan(self):
-<<<<<<< HEAD:SOLEIL/EnergyScanPX2.py-saved
-        if self.dbConnection is None:
-            return
-        try:
-            session_id=int(self.scanInfo['sessionId'])
-        except:
-            return
-        gevent.spawn(StoreEnergyScanThread, self.dbConnection,self.scanInfo)
-        #self.storeScanThread.start()
-
-    def updateEnergyScan(self,scan_id,jpeg_scan_filename):
-        pass
-
-    # Move energy commands
-    def canMoveEnergy(self):
-        return self.canScanEnergy()
-    
-    def getCurrentEnergy(self):
-        if self.energyMotor is not None:
-            try:
-                return self.energyMotor.getPosition()
-            except: 
-                logging.getLogger("HWR").exception("EnergyScan: couldn't read energy")
-                return None
-        elif self.energy2WavelengthConstant is not None and self.defaultWavelength is not None:
-            return self.energy2wavelength(self.defaultWavelength)
-        return None
-
-
-    def get_value(self):
-        return self.getCurrentEnergy()
-    
-    
-    def getEnergyLimits(self):
-        lims=None
-        if self.energyMotor is not None:
-            if self.energyMotor.isReady():
-                lims=self.energyMotor.getLimits()
-        return lims
-    def getCurrentWavelength(self):
-        if self.energyMotor is not None:
-            try:
-                return self.energy2wavelength(self.energyMotor.getPosition())
-            except:
-                logging.getLogger("HWR").exception("EnergyScan: couldn't read energy")
-                return None
-        else:
-            return self.defaultWavelength
-    def getWavelengthLimits(self):
-        lims=None
-        if self.energyMotor is not None:
-            if self.energyMotor.isReady():
-                energy_lims=self.energyMotor.getLimits()
-                lims=(self.energy2wavelength(energy_lims[1]),self.energy2wavelength(energy_lims[0]))
-                if lims[0] is None or lims[1] is None:
-                    lims=None
-        return lims
-    
-    def startMoveEnergy(self,value,wait=True):
-        logging.getLogger("HWR").info("Moving energy to (%s)" % value)
-        try:
-            value=float(value)
-        except (TypeError,ValueError),diag:
-            logging.getLogger("HWR").error("EnergyScan: invalid energy (%s)" % value)
-            return False
-
-        try:
-            curr_energy=self.energyMotor.getPosition()
-        except:
-            logging.getLogger("HWR").exception("EnergyScan: couldn't get current energy")
-            curr_energy=None
-
-        if value!=curr_energy:
-            logging.getLogger("HWR").info("Moving energy: checking limits")
-            try:
-                lims=self.energyMotor.getLimits()
-            except:
-                logging.getLogger("HWR").exception("EnergyScan: couldn't get energy limits")
-                in_limits=False
-            else:
-                in_limits=value>=lims[0] and value<=lims[1]
-                
-            if in_limits:
-                logging.getLogger("HWR").info("Moving energy: limits ok")
-                self.previousResolution=None
-                if self.resolutionMotor is not None:
-                    try:
-                        self.previousResolution=self.resolutionMotor.getPosition()
-                    except:
-                        logging.getLogger("HWR").exception("EnergyScan: couldn't get current resolution")
-                self.moveEnergyCmdStarted()
-                def change_egy():
-                    try:
-                        self.moveEnergy(value, wait=True)
-                    except:
-                        self.moveEnergyCmdFailed()
-                    else:
-                        self.moveEnergyCmdFinished(True)
-                if wait:
-                    change_egy()
-                else:
-                    gevent.spawn(change_egy)
-            else:
-                logging.getLogger("HWR").error("EnergyScan: energy (%f) out of limits (%s)" % (value,lims))
-                return False          
-        else:
-            return None
-
-        return True
-    def startMoveWavelength(self,value, wait=True):
-        energy_val=self.energy2wavelength(value)
-        if energy_val is None:
-            logging.getLogger("HWR").error("EnergyScan: unable to convert wavelength to energy")
-            return False
-        return self.startMoveEnergy(energy_val, wait)
-    def cancelMoveEnergy(self):
-        self.moveEnergy.abort()
-    def energy2wavelength(self,val):
-        if self.energy2WavelengthConstant is None:
-            return None
-        try:
-            other_val=self.energy2WavelengthConstant/val
-        except ZeroDivisionError:
-            other_val=None
-        return other_val
-    def energyPositionChanged(self,pos):
-        wav=self.energy2wavelength(pos)
-        if wav is not None:
-            self.emit('energyChanged', (pos,wav))
-            self.emit('valueChanged', (pos, ))
-    def energyLimitsChanged(self,limits):
-        self.emit('energyLimitsChanged', (limits,))
-        wav_limits=(self.energy2wavelength(limits[1]),self.energy2wavelength(limits[0]))
-        if wav_limits[0]!=None and wav_limits[1]!=None:
-            self.emit('wavelengthLimitsChanged', (wav_limits,))
-        else:
-            self.emit('wavelengthLimitsChanged', (None,))
-    def moveEnergyCmdReady(self):
-        if not self.moving:
-            self.emit('moveEnergyReady', (True,))
-    def moveEnergyCmdNotReady(self):
-        if not self.moving:
-            self.emit('moveEnergyReady', (False,))
-    def moveEnergyCmdStarted(self):
-        self.moving = True
-        self.emit('moveEnergyStarted', ())
-    def moveEnergyCmdFailed(self):
-        self.moving = False
-        self.emit('moveEnergyFailed', ())
-    def moveEnergyCmdAborted(self):
-        pass
-        #self.moving = False
-        #self.emit('moveEnergyFailed', ())
-    def moveEnergyCmdFinished(self,result):
-        self.moving = False
-        self.emit('moveEnergyFinished', ())
-
-    def getPreviousResolution(self):
-        return (self.previousResolution,self.lastResolution)
-
-    def restoreResolution(self):
-        if self.resolutionMotor is not None:
-            if self.previousResolution is not None:
-                try:
-                    self.resolutionMotor.move(self.previousResolution)
-                except:
-                    return (False,"Error trying to move the detector")
-                else:
-                    return (True,None)
-            else:
-                return (False,"Unknown previous resolution")
-        else:
-            return (False,"Resolution motor not defined")
-=======
         logging.getLogger("HWR").debug('EnergyScan:storeEnergyScan')
         #if self.dbConnection is None:
             #return
@@ -829,7 +464,6 @@ class EnergyScan(Equipment):
         
     def updateEnergyScan(self, scan_id, jpeg_scan_filename):
         logging.getLogger("HWR").debug('EnergyScan:updateEnergyScan')
->>>>>>> Version PX1 before update to 2.0.10:EnergyScan.py
 
     # Elements commands
     def getElements(self):
@@ -861,23 +495,6 @@ class EnergyScan(Equipment):
     def doEnergyScan(self, element, edge, directory, filename):
         logging.getLogger("HWR").info('EnergyScan: Element:%s Edge:%s' %(element,edge))    	
 
-<<<<<<< HEAD:SOLEIL/EnergyScanPX2.py-saved
-def StoreEnergyScanThread(db_conn, scan_info):
-    scanInfo = dict(scan_info)
-    dbConnection = db_conn
-    
-    blsampleid = scanInfo['blSampleId']
-    scanInfo.pop('blSampleId')
-    db_status=dbConnection.storeEnergyScan(scanInfo)
-    if blsampleid is not None:
-        try:
-            energyscanid=int(db_status['energyScanId'])
-        except:
-            pass
-        else:
-            asoc={'blSampleId':blsampleid, 'energyScanId':energyscanid}
-            dbConnection.associateBLSampleAndEnergyScan(asoc)
-=======
         e_edge, roi_center = self.getEdgefromXabs(element, edge)
         self.thEdge = e_edge
         self.element = element
@@ -1009,7 +626,7 @@ class EnergyScanThread(QThread):
    
     def prepare4EScan(self):
         logging.getLogger("HWR").debug('EnergyScanThread:prepare4EScan')
-        self.mrtx.On()
+#        self.mrtx.On()
         
         self.parent.connectTangoDevices()
         if not self.parent.canScan :     
@@ -1027,21 +644,18 @@ class EnergyScanThread(QThread):
         #time.sleep(0.5)
         self.parent.fluodetdevice.presettype = 1
         self.parent.fluodetdevice.peakingtime = 2.5 #2.1
-        # Actuellement, on se sert de l'integrationTime comme presetValue
-#        self.parent.fluodetdevice.presetvalue = 0.64 #1.
-        self.parent.fluodetdevice.presetvalue = integrationTime #1.
+        self.parent.fluodetdevice.presetvalue = 0.64 #1.
         
         #conversion factor: 2048 channels correspond to 20,000 eV hence we have approx 10eV per channel
         #channelToeV = self.parent.fluodetdevice.dynamicRange / len(self.parent.fluodetdevice.channel00)
         channelToeV = 10. #MS 2013-05-23
-        
         roi_debut = 1000.0*(self.roi_center - self.parent.roiwidth / 2.0) #values set in eV
         roi_fin   = 1000.0*(self.roi_center + self.parent.roiwidth / 2.0) #values set in eV
         print 'roi_debut', roi_debut
         print 'roi_fin', roi_fin
         
         
-        channel_debut = int(roi_debut / channelToeV)
+        channel_debut = int(roi_debut / channelToeV) 
         channel_fin   = int(roi_fin / channelToeV)
         print 'channel_debut', channel_debut
         print 'channel_fin', channel_fin
@@ -1066,11 +680,8 @@ class EnergyScanThread(QThread):
         self.parent.lightdevice.Extract()
 #        self.parent.md2device.write_attribute('BackLightIsOn', False)
         time.sleep(1)
-        self.parent.ketekinsertdevice.Insert()
-####################### A REMODIFIER PLUS TARD QUAND ON AURA LE COLLIMATEUR ##########################
-        self.guillotdevice.Insert()
 #        self.parent.bstdevice.Insert()
-        self.parent.bstdevice.Extract()
+        self.parent.ketekinsertdevice.Insert()
 #        self.parent.md2device.write_attribute('FluoDetectorBack', 0)
         time.sleep(4)
 #        self.parent.safetyshutterdevice.Open()
@@ -1205,7 +816,7 @@ class EnergyScanThread(QThread):
         
         # On ajoute un sensor pour la valeur normalisee (specifique au EScan)
         nbSensors = nbSensors + 1
-        fmt_f = "%12.4e" + (nbSensors + 2)*"%12.4e" + "\n"
+        fmt_f = "%12.4e" + (nbSensors + 3)*"%12.4e" + "\n"
         _ln = 0
         
         channel_debut, channel_end = self.parent.fluodetdevice.roisStartsEnds
@@ -1220,10 +831,8 @@ class EnergyScanThread(QThread):
             
             # positionnement du moteur
             while str(sMotorDevice.State()) == 'MOVING':
-                time.sleep(0.1)
+                time.sleep(1)
             sMotorDevice.write_attribute(sMotor[1], pos_i) #sMotorDevice.__setattr__(sMotor[1], pos_i)
-            while str(sMotorDevice.State()) == 'MOVING':
-                time.sleep(0.1)
             
             
             # opening the fast shutter
@@ -1241,24 +850,29 @@ class EnergyScanThread(QThread):
             intensity = 0
             eventsInRun = 0
             eventsInRun_upToROI = 0
+	    eventsInRun_diffusion = 0
             for mS in range(self.miniSteps):
                 measurement += 1
                 self.parent.fluodetdevice.Start()
+                time.sleep(0.1)
                 #self.parent.counterdevice.Start()
                 #time.sleep(integrationTime/self.miniSteps)
                 #while self.parent.counterdevice.State().name != 'STANDBY':
                     #pass
                 #self.parent.fluodetdevice.Abort()
                 while self.parent.fluodetdevice.State().name != 'STANDBY':
-                     time.sleep(0.1)
+                    time.sleep(0.1)
 #                    pass
-                roiCounts += self.parent.fluodetdevice.roi00_01
+#                roiCounts += self.parent.fluodetdevice.roi00_01
+                roiCounts += self.parent.fluodetdevice.roi02_01
                 intensity += self.parent.xbpmdevice.intensity
-                eventsInRun += self.parent.fluodetdevice.eventsInRun00
+                eventsInRun += self.parent.fluodetdevice.eventsInRun02
                 #print 5*'\n'
                 #print 'realTime00', self.parent.fluodetdevice.realTime00
                 #print 5*'\n'
-                eventsInRun_upToROI += sum(self.parent.fluodetdevice.channel00[ :channel_end + 1])
+#                eventsInRun_upToROI += sum(self.parent.fluodetdevice.channel00[ :channel_end + 1])
+                eventsInRun_upToROI += sum(self.parent.fluodetdevice.channel02[ :channel_end + 1])
+		eventsInRun_diffusion += sum(self.parent.fluodetdevice.channel02[ channel_end + 50 :])
                 #collectRecord['DataPoints'][measurement] = {}
                 #collectRecord['DataPoints'][measurement]['MonoEnergy'] = pos_i
                 #collectRecord['DataPoints'][measurement]['ROICounts']  = self.parent.fluodetdevice.roi00_01
@@ -1271,10 +885,11 @@ class EnergyScanThread(QThread):
             print "Position: %12.4e   Measures: " % pos_readed
             
             # Lecture des differents sensors           
-            measures.append(roiCounts) #(self.parent.fluodetdevice.roi00_01) #eventsInRun00)
-            measures.append(intensity) #(self.parent.xbpmdevice.intensity)
-            measures.append(eventsInRun) #(self.parent.fluodetdevice.eventsInRun00)
-            measures.append(eventsInRun_upToROI)
+            measures.append(roiCounts) #measures[2]#(self.parent.fluodetdevice.roi00_01) #eventsInRun00)
+            measures.append(intensity) #measures[3]#(self.parent.xbpmdevice.intensity)
+            measures.append(eventsInRun) #measures[4]#(self.parent.fluodetdevice.eventsInRun00)
+            measures.append(eventsInRun_upToROI)#measures[5]
+            measures.append(eventsInRun_diffusion)
             # closing the fastshutter
             self.parent.fastshutterdevice.Close() 
             #self.parent.md2device.CloseFastShutter() #write_attribute('FastShutterIsOpen', 0)
@@ -1284,8 +899,9 @@ class EnergyScanThread(QThread):
             # Valeur normalisee specifique au EScan 
             #(Oblige an mettre le sensor compteur en premier et le xbpm en deuxieme dans le liste des sensors)               
             try:
-                measures[1] = measures[2] / measures[5] #measures[3]  
+                measures[1] = measures[2] / measures[6] #measures[3]  
 #                measures[1] = measures[2] / measures[3]   
+#                measures[1] = measures[2]   
             except ZeroDivisionError, e:
                 print e
                 print 'Please verify that the safety shutter is open.'
@@ -1305,8 +921,8 @@ class EnergyScanThread(QThread):
         
         # Exiting the Scan loop      
         self.parent.fastshutterdevice.Close()
-        while self.parent.fastshutterdevice.State != "CLOSE":
-            time.sleep(0.1)
+#        while self.parent.fastshutterdevice.State != 'CLOSE':
+#            time.sleep(0.1)
 #        self.parent.md2device.CloseFastShutter() 
         #while self.parent.md2device.read_attribute('FastShutterIsOpen') != 0:
             #time.sleep(0.05)
@@ -1328,8 +944,7 @@ class EnergyScanThread(QThread):
 
     def afterScan(self) :
         logging.getLogger("HWR").debug('EnergyScanThread:afterScan')
-        self.parent.safetyshutterdevice.Close()
+#        self.parent.safetyshutterdevice.Close()
         if self.parent.pk :
             self.parent.startMoveEnergy(self.parent.pk)
             
->>>>>>> Version PX1 before update to 2.0.10:EnergyScan.py

@@ -1,19 +1,44 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
+from HardwareRepository import HardwareRepository
+from HardwareRepository import BaseHardwareObjects
 
-import optparse
 import time
-import PyTango
-import pylab
+#import pylab
 import numpy
 import os
 import pickle
 import math
+
+from PyTango import DeviceProxy as dp
+
 from xabs_lib import *
 
-class XfeCollect(object):
-    def __init__(self, integrationTime = .64, directory = '/tmp', prefix = 'test', sessionId = None, sampleId = None, test=False, optimize=False):
+class XfeCollect(BaseHardwareObjects.Device):
+
+    def init(self):
+
+        self.hdw_control = True
+
+        if self.mode == 'test':
+            self.test = True
+        else:
+            self.test = False
+
+        self.fastshut = self.getObjectByRole("fast_shutter")
+        self.safshut = self.getObjectByRole("safety_shutter")
+        self.fluodet = self.getObjectByRole("fluodet")
+
+        self.ble = dp(self.ble_dev)
+
+        self.Ps_h = dp(self.ps_h_dev)
+        self.Ps_v = dp(self.ps_v_dev)
+        self.Const = dp(self.const_dev)
+        self.Fp = dp(self.fp_dev)
+
+    def setup(self, integrationTime = .64, directory = '/tmp', prefix = 'test', sessionId = None, sampleId = None, optimize=False):
+
         self.integrationTime = integrationTime
         self.directory = directory
         self.prefix = prefix
@@ -21,22 +46,17 @@ class XfeCollect(object):
         self.sampleId = sampleId
         self.filename = os.path.join(self.directory, self.prefix + '_fxe.png') #filename
         
-        self.md2     = PyTango.DeviceProxy('i11-ma-cx1/ex/md2')
-        self.fluodet   = PyTango.DeviceProxy('i11-ma-cx1/dt/dtc-mca_xmap.1')
-        #self.counter = PyTango.DeviceProxy('i11-ma-c00/ca/cpt.2')
-        self.obx     = PyTango.DeviceProxy('i11-ma-c04/ex/obx.1')
-        self.ble     = PyTango.DeviceProxy('i11-ma-c00/ex/beamlineenergy')
-        self.monodevice = PyTango.DeviceProxy('i11-ma-c03/op/mono1')
         self.optimize = optimize
-        self.test = test
-        self.fluodet.presettype = 1
-        self.fluodet.peakingtime = 2.5
-        self.channelToeV = 10. #self.fluodet.dynamicRange / len(self.fluodet.channel00)
+
         try:
-            os.mkdir(directory)
+            if not os.path.exists(directory):
+                os.mkdir(directory)
+            else:
+                if not os.path.isdir(directory):
+                    print directory," exists, but it not a directory"  
         except OSError, e:
             print e
-    
+
     def wait(self, device):
         while device.state().name == 'MOVING':
             time.sleep(.1)
@@ -45,49 +65,14 @@ class XfeCollect(object):
             time.sleep(.1)
             
     def transmission(self, x=None):
-        '''Get or set the transmission'''
-        if self.test == True: return 0
-        Fp = PyTango.DeviceProxy('i11-ma-c00/ex/fp_parser')
-        if x == None:
-            return Fp.TrueTrans_FP
-
-        Ps_h = PyTango.DeviceProxy('i11-ma-c02/ex/fent_h.1')
-        Ps_v = PyTango.DeviceProxy('i11-ma-c02/ex/fent_v.1')
-        Const = PyTango.DeviceProxy('i11-ma-c00/ex/fpconstparser')
-
-        truevalue = (2.0 - math.sqrt(4 - 0.04 * x)) / 0.02
-
-        newGapFP_H = math.sqrt(
-            (truevalue / 100.0) * Const.FP_Area_FWHM / Const.Ratio_FP_Gap)
-        newGapFP_V = newGapFP_H * Const.Ratio_FP_Gap
-
-        Ps_h.gap = newGapFP_H
-        Ps_v.gap = newGapFP_V
-        
-    def secondaryTransmission(self, x=None):
-        '''Get or set the transmission by secondary slits'''
-        if self.test == True: return 0
-        Fp = PyTango.DeviceProxy('i11-ma-c00/ex/fp_parser')
-        if x == None:
-            return Fp.TrueTrans_FP
-
-        Ss_h = PyTango.DeviceProxy('i11-ma-c04/ex/fent_h.2')
-        Ps_v = PyTango.DeviceProxy('i11-ma-c04/ex/fent_v.2')
-        Const = PyTango.DeviceProxy('i11-ma-c00/ex/fpconstparser')
-
-        truevalue = (2.0 - math.sqrt(4 - 0.04 * x)) / 0.02
-
-        newGapFP_H = math.sqrt(
-            (truevalue / 100.0) * Const.FP_Area_FWHM / Const.Ratio_FP_Gap)
-        newGapFP_V = newGapFP_H * Const.Ratio_FP_Gap
-
-        Ps_h.gap = newGapFP_H
-        Ps_v.gap = newGapFP_V
+        logging.debug("XfeCollect. transmission() This is a stub. should implemented at each beamline")
         
     def go10eVabovetheEdge(self):
         if self.test == True: return 0
-        self.ble.write_attribute('energy', self.thEdge + 0.01)
-        self.wait(self.ble)
+
+        if self.hdw_control:
+            self.ble.write_attribute('energy', self.thEdge + 0.01)
+            self.wait(self.ble)
             
     def getEdgefromXabs(self, el, edge):
         edge = edge.upper()
@@ -114,25 +99,31 @@ class XfeCollect(object):
         self.lowBoundary = 0
         self.highBoundary = None
         k = 0
-        self.obx.Open()
-        self.insertDetector()
+
+        if self.hdw_control:
+            self.safshut.openShutter()
+            self.insertFluoDet()
+
         while not .7 < self.tentativeDeadTime < .8:
             if self.transmission() > 50:
                 break
             
             self.measureSpectrum()
-            ICR = self.fluodet.inputCountRate00
-            OCR = self.fluodet.outputCountRate00
-            eventTime = self.fluodet.realTime00
+            ICR = self.fluodet.getICR()
+            OCR = self.fluodet.getOCR()
+            eventTime = self.fluodet.getRealTime()
             self.inverseDeadTime = 1. - (OCR / ICR) # * eventTime
             self.tentativeDeadTime = (OCR / ICR)
             k += 1
             print 'Cycle %d, deadtime is %f' % (k, self.inverseDeadTime)
             self.adjustTransmission()
+
         print 'Transmission optimized at %s, the deadtime is %s' % (self.currentTransmission, self.inverseDeadTime)
         print 'Tentative real deadtime is %f' % self.tentativeDeadTime
-        self.obx.Open()
-        self.extractDetector()
+
+        if self.hdw_control:
+            self.safshut.openShutter()
+            self.extractFluoDet()
         
     def adjustTransmission(self):
         if self.test == True: return 0
@@ -153,138 +144,138 @@ class XfeCollect(object):
     def canSpectrum(self):
         return True
         
-    def setIntegrationTime(self, integrationTime = 0.64):
-        if self.test == True: return 0
-        #self.counter.integrationTime = integrationTime
-        self.fluodet.presetvalue = float(integrationTime)
-        
     def setROI(self, roi_debut = 0., roi_fin = 2048.):
         if self.test == True: return 0
-        self.fluodet.SetROIs(numpy.array((roi_debut, roi_fin)))
-        #pass
-    
-    def insertDetector(self):
-        if self.test == True: return 0
-        self.md2.FluoDetectorIsBack = False
-        time.sleep(5)
-    
-    def extractDetector(self):
-        if self.test == True: return 0
-        self.md2.FluoDetectorIsBack = True
+        self.fluodet.set_roi(roi_debut,roi_fin)
     
     def startXfeSpectrum(self):
-        self.transmission(0.5)
         self.measureSpectrum()
         return 
         
     def cancelXfeSpectrum(self):
         if self.test == True: return 0
-        self.close_fast_shutter()
-        self.fluodet.Abort()
-        self.obx.Close()
-        self.extractDetector()
+
+        if self.hdw_control:
+            self.closeFastShutter()
+            self.fluodet.abort()
+            self.safshut.closeShutter()
+            self.extractFluoDet()
         
     def isConnected(self):
         return True
         
-    def open_fast_shutter(self):
-        while self.md2.FastShutterIsOpen is False:
-            print 'Fast shutter is open ?', self.md2.FastShutterIsOpen
+    def openFastShutter(self,timeout=0.5):
+
+        t0 = time.time()
+
+        while str( self.fastshut.getShutterState() ) != "opened":
+
+            if (time.time() - t0 ) > timeout:
+                logging.error("Timeout. Could not open fast shutter.") 
+                return False
+
             while self.get_state() != 'Ready':
                 time.sleep(0.1)
-            print 'opening the fast shutter'
+
             try:
-                self.md2.FastShutterIsOpen = True
+                self.fastshut.openShutter()
             except:
                 import traceback
                 traceback.print_exc()
+
+        return True
         
-    def close_fast_shutter(self):
-        self.md2.FastShutterIsOpen = False
+    def closeFastShutter(self):
+        self.fastshut.closeShutter()
 
     def get_state(self):
-        for state in self.md2.motorstates:
-            if 'Moving' in state:
-                return 'Moving'
-        return 'Ready'
+        logging.debug("XfeCollect. get_state() This is a stub. should implemented at each beamline")
         
     def set_collect_phase(self):
-        phase_name = 'DataCollection'
-        self.md2.startSetPhase(phase_name)
-        while self.md2.currentPhase != phase_name or self.get_state() != 'Ready':
-            time.sleep(0.1)
-        
-    def get_calibration(self):
-        A = -0.0161723871876
-        B = 0.00993475667754
-        C = 0.0
-        return A, B, C
+        logging.debug("XfeCollect. set_collect_phase() This is a stub. should implemented at each beamline")
         
     def measureSpectrum(self):
         if self.test == True: return 0
-        self.setIntegrationTime(self.integrationTime)
-        if self.optimize != True:
-            self.insertDetector()
-            self.obx.Open()
-        #self.transmission(1)
-        time.sleep(1)
-        self.set_collect_phase()
-        self.open_fast_shutter()
-        self.fluodet.Start()
-        #self.counter.Start()
-        while self.fluodet.state().name != 'STANDBY':
-            time.sleep(0.1)
-            #time.sleep(int(self.integrationTime))
-        self.close_fast_shutter()
-        if self.optimize != True:
-            self.extractDetector()
-        
-    def get_calibrated_energies(self):
-        energies = self.getXvals()
-        A, B, C = self.get_calibration()
-        energies += A + B*energies + C*energies**2
-        return energies
-        
-    def getSpectrum(self):
-        return self.fluodet.channel00
-        
-    def getMcaConfig(self):
-        return {'att': '7', 'energy': 12.65, 'bsX': 1, 'bsY': 2 }
-    
-    def getXvals(self):
-        start, end   = 0, 2048
-        step = 1
-        return numpy.arange(start, end, step)
 
+        self.fluodet.set_preset(float(self.integrationTime))
+
+        if self.optimize != True and self.hdw_control:
+            self.insertFluoDet()
+            self.safshut.openShutter()
+
+        time.sleep(1)
+        if self.hdw_control:
+            self.set_collect_phase()
+
+            if not self.openFastShutter():
+                logging.error("XfeCollect. Collection aborted")
+                cleanup()
+                return
+ 
+        self.fluodet.start()
+        self.fluodet.wait()
+
+        cleanup()
+        
+    def cleanup(self):
+
+        if not self.hdw_control:
+            return
+
+        self.closeFastShutter()
+        if self.optimize != True:
+            self.fluodet.extract()
+
+    def getSpectrum(self):
+        return self.fluodet.get_data()
+        
     def getValue(self):
-        return self.getXvals(), self.getSpectrum()
+        return self.fluodet.get_spectrum()
+
+    def getValueCalibrated(self):
+        return self.fluodet.get_spectrum_calibrated()
+
+    def getMcaConfig(self):
+        retdict = {}
+        retdict['energy'] = 12.65
+        retdict['bsX'] = 1
+        retdict['bsY'] = 2
+        retdict['att'] = 7
+        return retdict
+
+    def getMcaCalib(self):
+        return self.fluodet.get_calibration()
 
     def saveData(self):
         f = open(self.filename[:-4]  + '.pck', 'w')
-        x = self.getXvals()
-        y = self.getSpectrum()
-        energies = self.get_calibrated_energies()
-        cal = self.get_calibration()
+        x = self.fluodet.get_xvals()
+        y = self.fluodet.get_data()
+        energies = self.fluodet.get_calibrated_energies()
+        cal = self.fluodet.get_calibration()
         pickle.dump({'x': x, 'energies': energies, 'calibration': cal, 'y': y}, f)
         f.close()
-        #self.plotSpectrum()
         
     def plotSpectrum(self):
-        x = self.get_calibrated_energies() #getXvals()
-        y = self.getSpectrum()
+        x = self.fluodet.get_calibrated_energies() #getXvals()
+        y = self.fluodet.get_data()
         self.saveData()
         
-        pylab.figure()
-        pylab.plot(x, y)
-        pylab.xlim(x[0], x[-1])
-        pylab.title('X-ray fluorescence emission spectrum')
-        pylab.xlabel('Energy [keV]')
-        pylab.ylabel('Intensity [Counts]')
-        pylab.savefig(self.filename)
+        #pylab.figure()
+        #pylab.plot(x, y)
+        #pylab.xlim(x[0], x[-1])
+        #pylab.title('X-ray fluorescence emission spectrum')
+        #pylab.xlabel('Energy [keV]')
+        #pylab.ylabel('Intensity [Counts]')
+        #pylab.savefig(self.filename)
         
-        ##pylab.show()
+        #pylab.show()
+
+    def setHardwareControlMode(self, mode):
+        self.hdw_control = mode
         
-if __name__ == '__main__':
+def main():
+    import optparse
+
     usage = 'Program to perform collect on PX2 beamline.\n\n%prog -n <number_of_images>\n\nNumber of images to be collected has to be specified, others are optional.'
     parser = optparse.OptionParser(usage = usage)
 
@@ -295,10 +286,34 @@ if __name__ == '__main__':
     (options, args) = parser.parse_args()
     print options
     print args
+
+    # create the xanes object
+    hwr_directory = os.environ["XML_FILES_PATH"]
+
+    hwr = HardwareRepository.HardwareRepository(os.path.abspath(hwr_directory))
+    hwr.connect()
+
+    xfecollect = hwr.getHardwareObject("/xfecollect")
+    xfecollect.setHardwareControlMode(False)  # only control detector hardware, no shutter or other
+
+    xfecollect.setup(options.exposure, options.directory, options.prefix)
     
-    doCollect = XfeCollect(options.exposure, options.directory, options.prefix)
-    doCollect.setROI(1, 2048)
+    xfecollect.setROI(1, 2048)
     time.sleep(0.5)
-    doCollect.measureSpectrum()
-    doCollect.plotSpectrum()
-    pylab.show()
+    xfecollect.measureSpectrum()
+    xfecollect.plotSpectrum()
+
+if __name__ == '__main__':
+    import sys
+    import os
+
+
+    print "Running XfeCollect procedure standalone"
+    hwrpath = os.environ.get('XML_FILES_PATH',None)
+
+    if hwrpath is None:
+        print "  -- you should first source the file mxcube.rc to set your environment variables"
+        sys.exit(0)
+    else:
+        main()
+

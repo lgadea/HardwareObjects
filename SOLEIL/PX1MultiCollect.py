@@ -1,15 +1,51 @@
+from HardwareRepository import HardwareRepository
 from HardwareRepository.BaseHardwareObjects import HardwareObject
 from AbstractMultiCollect import *
 from gevent.event import AsyncResult
 import logging
 import time
-import os, copy
+import os
+import copy
+import math
 import httplib
+import subprocess
+import socket
+import re
 
+import PyTango
 from PyTango import DeviceProxy
+from collections import namedtuple
+import SOLEILMergeImage as mergeImage
+
+# PL.
+def chmod_dir(dirname):    
+    try:
+        #os.mkdir(dirname)
+        os.chmod(dirname, 0777)
+    #except OSError:
+    #    pass
+    except Exception, err:
+        logging.error("<PX1 MultiCollect> Error in chmod directory: %s" % dirname)
+        logging.error("<PX1 MultiCollect> Error = %s" % err)
+
+def make_process_dir(dirname):
+    _pdir = os.path.join(dirname, "process")
+    make_dir(_pdir)
+
+def write_goimg(path):
+    dirname = "/nfs/ruche/share-temp/Proxima/.goimgpx1"
+    db = "goimg.db"
+    db_f = os.path.join(dirname, db)
+    if db in os.listdir(dirname):
+        os.remove(db_f)
+    dbo = open(db_f, "w")
+    dbo.write(path)
+    dbo.close()
+    os.chmod(db_f, 0777)
+#/ PL.
 
 class TunableEnergy:
-    # self.bl_control is passed by ESRFMultiCollect
+    # self.bl_control is passed by PX1MultiCollect
     @task
     def set_wavelength(self, wavelength):
         energy_obj = self.bl_control.energy
@@ -17,24 +53,41 @@ class TunableEnergy:
 
     @task
     def set_energy(self, energy):
+        logging.info("<TunableEnergy> Set to energy: %s" % energy)
         energy_obj = self.bl_control.energy
-        return energy_obj.startMoveEnergy(energy)
+        
+        t0 = time.time()        
+        energy_obj.startMoveEnergy(energy)
+        time.sleep(0.5)
+        while energy_obj.getState() in ["MOVING",]:
+            time.sleep(0.2)
+        logging.info("<TunableEnergy> Energy changed in: %.1f sec" % (time.time()-t0))
+        return energy_obj.getCurrentEnergy()
 
     def getCurrentEnergy(self):
         return self.bl_control.energy.getCurrentEnergy()
 
     def get_wavelength(self):
-        return self.bl_control.energy.getCurrentWavelength()
+        #wavlen = self.bl_control.energy.getCurrentWavelength()
+        wavlen = self.bl_control.resolution.currentWavelength
+	if not wavlen:
+            logging.warning("PX1Multicollect: Can't get wavlen: %s")           
+        return wavlen
 
 class PixelDetector:
     def __init__(self):
         self.shutterless = True
         self.new_acquisition = True
+        self.first_frame = True
+        self.jpeg_allframes = False
         self.shutterless_exptime = None
         self.shutterless_range = None
+        self.shutterless_osc = None
+	self.last_time_visu = time.time()-1.
 
     @task
     def prepare_acquisition(self, take_dark, start, osc_range, exptime, npass, number_of_images, comment=""):
+        logging.info("<PX1 MultiCollect> prepare_acquisition")
         self.new_acquisition = True
         self.cimg = self.collectServer.currentImageSpi
         if  osc_range < 0.0001:
@@ -43,13 +96,60 @@ class PixelDetector:
         if self.shutterless:
             self.shutterless_range = osc_range*number_of_images
             self.shutterless_exptime = (exptime + 0.003)*number_of_images
-        logging.info("<PX1 MultiCollect> TODO - prepare acquisition")
-
-
+            self.shutterless_osc = osc_range
+        # PL 2015_01_23 For ADXV visualisation.
+#==============================================================================
+#         #check if pilatus fault restart pilatus by collectServer.
+#         #_env_state = str(self.pilatusServer.State())
+#         if str(self.pilatusServer.State()) == "FAULT" :
+#             self.collectServer.PrepareCollect()
+#==============================================================================
+        self.connectVisualisation()
+        self.wait_recalibration()
         self.prepare_detector_header(take_dark, start, osc_range, exptime, npass, number_of_images, comment)
 
         #self.execute_command("prepare_acquisition", take_dark, start, osc_range, exptime, npass, comment)
         #self.getCommandObject("build_collect_seq").executeCommand("write_dp_inputs(COLLECT_SEQ,MXBCM_PARS)",wait=True)
+
+    @task
+    def wait_collectServer_ready(self):
+        _state = self.collectServer.State()
+        while str(_state) != "STANDBY":
+            logging.info("<PX1 MultiCollect> WAIT_COLLECT State: %s" % _state)
+            time.sleep(0.2)
+            _state = self.collectServer.State()
+
+    def do_recalibration(self, energy):
+        energy = float(energy)
+        logging.info("<PX1 MultiCollect> PixelDectector.do_recalibration for %.4f KeV" % energy)
+        # tester si la difference entre currentEnergy et energy necessite la recalibration.
+        PILATUS_THRESHOLD_MIN = 3774. # en eV
+        ENERGY_CALIBRATION_MIN = 7.6  # en keV
+        oldThreshold = self.pilatusServer.threshold
+        nrj_diff = energy - 2*oldThreshold/1000.
+        if (oldThreshold == PILATUS_THRESHOLD_MIN and energy < ENERGY_CALIBRATION_MIN):
+            logging.warning("Re-calibration of Pilatus detector not possible: THRESHOLD_MIN condition.")
+            return
+        elif ( nrj_diff < (-0.08*(2*oldThreshold/1000.)) or \
+               nrj_diff > (0.05*(2*oldThreshold/1000.))):
+            if str(self.pilatusServer.State()) != "STANDBY":
+                logging.getLogger("user_level_log").error("Re-calibration of Pilatus detector not possible.")
+                return
+            self.pilatusServer.SetEnergy(int(energy*1000))
+            time.sleep(1)
+            if self.pilatusServer.State() != "STANDBY":
+                logging.getLogger("user_level_log").info("Calibration of Pilatus detector in progress (takes about 1 minute).")
+
+    @task    
+    def wait_recalibration(self):
+        # Verify the Energy calibration status and re-calibrate if necessary
+        _threshold = self.pilatusServer.threshold
+        _env_state = str(self.pilatusServer.State())
+        logging.info("<PX1 MultiCollect> WAIT_PilatusServer State: %s Threshold %.1f" % (_env_state, _threshold))        
+        while str(_env_state) != "STANDBY":
+            time.sleep(2)
+            _env_state = str(self.pilatusServer.State())
+            logging.info("<PX1 MultiCollect>  PX1Env State 2: %s" % _env_state)        
         
     def prepare_detector_header(self,take_dark, start, osc_range, exptime, npass, number_of_images, comment):
 
@@ -58,7 +158,11 @@ class PixelDetector:
         ay, by = self.bl_config.beam_ay, self.bl_config.beam_by
 
         dist   = self.bl_control.detector_distance.getPosition()
-        wavlen = self.bl_control.energy.getCurrentWavelength()
+        wavlen = self.bl_control.resolution.currentWavelength
+	if wavlen:
+            logging.info( "PX1Multicollect: wavlen %.5f %s" % (wavlen, type(wavlen)))
+	else:
+            logging.info( "PX1Multicollect: wavlen %s %s" % (wavlen, type(wavlen)))           
         kappa_angle = self.kappa_hwo.getPosition()
 
         _settings = [
@@ -82,12 +186,25 @@ class PixelDetector:
             _settings.append(["Chi %.4f", start])
 
         for _setting in _settings:
-            _str_set = (_setting[0] % _setting[1])
+            try:
+                _str_set = (_setting[0] % _setting[1])
+            except:
+                _str_set = _setting[0]
+
             logging.getLogger().info( "MxSettings: " + _str_set )
             self.pilatusServer.SetMxSettings(_str_set)
 
     @task
     def set_detector_filenames(self, frame_number, start, filename, jpeg_full_path, jpeg_thumbnail_full_path):
+
+      #jpeg_full_path = self.normalize_path(jpeg_full_path)
+      #jpeg_thumbnail_full_pathh = self.normalize_path(jpeg_thumbnail_full_path)
+      #filename = self.normalize_path(filename)
+
+      self.current_jpeg_path = jpeg_full_path
+      self.current_thumb_path = jpeg_thumbnail_full_path
+      self.current_filename =  filename
+
       if self.shutterless and not self.new_acquisition:
           return
 
@@ -105,8 +222,15 @@ class PixelDetector:
 
       self.collectServer.imageName = basefile
       self.collectServer.imagePath = dirname
-      self.collectServer.PrepareCollect()
+      #self.collectServer.jpegpath = jpeg_full_path
+      #self.collectServer.jpegthumb = jpeg_thumbnail_full_path
 
+      logging.info("<PX1 MultiCollect> 1 PrepareCollect %s"  % self.collectServer.State())
+      time.sleep(0.2)
+      logging.info("<PX1 MultiCollect> 2 PrepareCollect %s"  % self.collectServer.State())
+      self.collectServer.PrepareCollect()
+      time.sleep(0.1)     
+      logging.info("<PX1 MultiCollect> 3 PrepareCollect %s"  % self.collectServer.State())
       #self.collectServer.imageName = "%s_%d_%04d.%s" % ( \
                         #_fileinfo['prefix'], _fileinfo['run_number'],
                         #_osc_seq['start_image_number'], _fileinfo['suffix'])
@@ -145,27 +269,116 @@ class PixelDetector:
 
     @task
     def do_oscillation(self, start, end, exptime, npass):
+      ADXV_LATT_TIME = 0.7
       if self.shutterless:
           if self.new_acquisition:
               # only do this once per collect
-              npass = 1
+              self.oscaxis = self.collectServer.collectAxis
               exptime = self.shutterless_exptime
-              end = start + self.shutterless_range
-          
-              # make oscillation an asynchronous task => do not wait here
-              logging.info("<PX1 MultiCollect> TODO - do oscillation new")
-              self.collectServer.Start()
-              self.new_acquisition = False
-              logging.getLogger("user_level_log").info("<PX1 MultiCollect> Collect server started waiting for first image")
-
-              # wait for image number to change. normally to 0, first
-              self.wait_nextimage()
-  
-          # wait for image number to change
-          self.wait_nextimage()
-
+              #end = start + self.shutterless_range
+              self.first_frame = True
+              # PL. 2015_09_14: Temporary hook to make characterization work.
+              if self.dcpars['experiment_type'] == 'Characterization':
+                  logging.getLogger("user_level_log").info("<PX1 MultiCollect> Characterization started")
+                  #logging.info("<PX1 MultiCollect> dcpars: %s" % self.dcpars)
+                  tempToOscillation = self.dcpars['fileinfo']['template'][:3]+"_wdg"+\
+                              self.dcpars['fileinfo']['template'][3:]
+                  logging.info("<PX1 MultiCollect> Characterization started temToOscil %s" % tempToOscillation)
+                  for nstart in range(self.dcpars['oscillation_sequence'][0]['number_of_images']):
+                      #tempFile =[]
+                      NIMAGE = 10
+                      templateImage = self.dcpars['fileinfo']['template'] % (nstart + 1)
+                      #tempFile.append(tempImagePull)
+                      osc_range = float(self.dcpars['oscillation_sequence'][0]['range'])/NIMAGE
+                      exp_time = float(self.dcpars['oscillation_sequence'][0]['exposure_time'])/NIMAGE
+                      self.collectServer.startAngle = start
+                      self.collectServer.numberOfImages = int(NIMAGE)
+                      self.collectServer.imageWidth = osc_range
+                      self.collectServer.exposurePeriod = exp_time
+                      self.collectServer.imageName =tempToOscillation % (start/self.collectServer.imageWidth + 1)
+                      #self.collectServer.imageName = self.dcpars['fileinfo']['template'] % (start/self.collectServer.imageWidth + 1)
+                      logging.info("<PX1 MultiCollect> CHARACTERIZATION: %s at %.2f degree" % 
+                                     (self.collectServer.imageName, self.collectServer.startAngle))
+                      time.sleep(0.1)
+                      self.collectServer.PrepareCollect()
+                      time.sleep(0.05)
+                      self.pilatusServer.SetMxSettings("Start_angle %.4f" % start)
+                      self.pilatusServer.SetMxSettings("Angle_increment %.4f" % osc_range)
+                      
+                      self.collectServer.Start()
+                      abs_filename = os.path.join(self.dcpars['fileinfo']['directory'], 
+                                                  self.collectServer.imageName)
+                      abs_filename_log = abs_filename[:-4]+".log"
+                      abs_lastImage = os.path.join(self.dcpars['fileinfo']['directory'], 
+                                                  templateImage)
+                      self.wait_image_on_disk(abs_filename)
+                      self.wait_collectServer_ready()
+                      self.wait_image_compil_on_disk(abs_filename_log)
+                      mergeImage.merge(abs_filename,
+                                       templateImage,
+                                       self.dcpars['fileinfo']['directory'],
+                                       start,
+                                       self.dcpars['oscillation_sequence'][0]['range'],
+                                       self.dcpars['oscillation_sequence'][0]['exposure_time'])  
+                      self.adxv_show_latest(filename=abs_lastImage)
+                      #here insert merge2
+                      start += 90.
+                  self.new_acquisition = False
+              else:
+                  # make oscillation an asynchronous task => do not wait here
+                  self.collectServer.Start()
+                  self.new_acquisition = False
+                  logging.getLogger("user_level_log").info("<PX1 MultiCollect> Collect server started waiting for first image")
+          else:
+              self.wait_for_axis(end, self.oscaxis)
+              self.adxv_show_latest(int(ADXV_LATT_TIME/exptime))
       else:
-          logging.info("<PX1 MultiCollect> TODO - do oscillation not new")
+          logging.info("<PX1 MultiCollect> TODO - not shutterless mode. Nothing done here")
+
+    def get_osc_axis(self):
+        #osc_seq = self.dcpars['oscillation_sequence'][0]
+        #if osc_seq.has_key('kappaStart'):
+        #    if osc_seq['kappaStart']!=0 and osc_seq['kappaStart']!=-9999:
+        #        data_collection.rotationAxis = 'Omega'
+        #        data_collection.omegaStart = osc_seq['start']
+        #    data_collection.rotationAxis = 'Phi'
+        #    osc_seq['kappaStart'] = -9999
+        #    osc_seq['phiStart'] = -9999
+        # data_collection.kappaStart = osc_seq['kappaStart']
+        # data_collection.phiStart = osc_seq['phiStart']
+        pass
+
+    @task
+    def wait_for_axis(self, end_angle, axis):
+        if axis == "Phi":
+            _axis_hwo = self.phi_hwo
+        elif axis == "Omega":
+            _axis_hwo = self.omega_hwo
+        current_angle = _axis_hwo.getPosition()
+        logging.info("<PX1 MultiCollect> WAIT_FOR_AXIS %s current: %7.2f end: %7.2f" % (axis, current_angle, end_angle))
+        while current_angle < end_angle:
+            time.sleep(0.02)
+            current_angle = _axis_hwo.getPosition()
+
+    def adxv_show_latest(self, _deltaT=0., filename=None):
+        interval_time = 2.
+        now = time.time()
+        # PL_20150912. Horible fix, but should work on PX1 with PILATUS and CBF.
+        image_file_template = self.current_filename[:-8] + "%04d.cbf"
+        try:
+            # every 2 seconds send a message to adxv for visu.
+            if filename:
+                self.adxv_sync(filename)
+                logging.getLogger("user_level_log").info("<PX1 MultiCollect> Image %s" % filename)
+                self.last_time_visu = now
+            elif (now - self.last_time_visu >= interval_time):
+                _cimg = self.collectServer.currentImageSpi
+                self.adxv_sync(image_file_template % (_cimg - _deltaT))
+                logging.getLogger("user_level_log").info("<PX1 MultiCollect> Image #%s" % _cimg)
+                self.last_time_visu = now
+        except Exception, err:
+            logging.warning("Warning for display with ADXV: %s" % err)
+    
     
     def wait_nextimage(self):
         cimg = self.cimg
@@ -175,17 +388,76 @@ class PixelDetector:
            time.sleep(0.02)
            cimg = self.collectServer.currentImageSpi
         self.cimg = cimg
-        logging.getLogger("user_level_log").info("<PX1 MultiCollect> end waiting for image number %s" % str(self.cimg))
+        if self.cimg != 0:
+            logging.getLogger("user_level_log").info("<PX1 MultiCollect> end waiting for image number %s" % str(self.cimg))
 
     @task
     def write_image(self, last_frame):
-      if last_frame:
-        if self.shutterless:
-            logging.info("<PX1 MultiCollect> TODO - write image ")
-            #self.execute_command("specific_collect_frame_hook")
+        #logging.info("<PX1 MultiCollect> in write_image ")
+        if self.jpeg_allframes or self.first_frame or last_frame:
+            logging.info("<PX1 MultiCollect> - write image ")
+            logging.info("Generating jpeg and thumbnail for:")
+            logging.info("   - Fullpath :  " + self.current_filename)
+            logging.info("   - jpegpath :  " + self.current_jpeg_path )
+            logging.info("   - thumpath :  " + self.current_thumb_path )
+      
+            self.wait_image_on_disk(self.current_filename)
+            self.adxv_show_latest(_deltaT=0., filename=self.current_filename)
+            if os.path.exists( self.current_filename ):
+                subprocess.Popen([ self.imgtojpeg, self.current_filename, self.current_jpeg_path, '0.4' ])
+                subprocess.Popen([ self.imgtojpeg, self.current_filename, self.current_thumb_path, '0.1' ])
+            else:
+                logging.info("Oopps.  Trying to generate thumbs but  image is not on disk") 
 
+            self.first_frame = False
+                        
+    @task
+    def wait_image_on_disk(self, filename, timeout=20.0):
+        start_wait = time.time()
+        while not os.path.exists(filename):
+            #logging.info("Waiting for image %s to appear on disk. Not there yet." % filename)
+            if time.time() - start_wait > timeout:
+               logging.info("Giving up waiting for image. Timeout")
+               break
+            time.sleep(0.1)
+        logging.info("Waiting for image %s ended in  %3.2f secs" % (filename, time.time()-start_wait))
+        
+    @task
+    def wait_image_compil_on_disk(self, filename, timeout=20.0):
+        start_wait = time.time()
+        while not os.path.exists(filename):
+            #logging.info("Waiting for image %s to appear on disk. Not there yet." % filename)
+            if time.time() - start_wait > timeout:
+               logging.info("Giving up waiting for image. Timeout")
+               break
+            time.sleep(0.1)
+        logging.info("Waiting for image %s ended in  %3.2f secs" % (filename, time.time()-start_wait))
+
+    def adxv_sync(self, imgname):
+        # connect to adxv to show the image
+        adxv_send_fmt = "\nload_image %s\n"+ chr(32)
+        #logging.info(adxv_send_fmt % imgname)
+        try:
+            if not self.adxv_socket:
+                try:
+                    self.connectVisualisation()
+                except Exception, err:
+                    self.adxv_socket = None
+                    logging.info("ADXV: Warning: Can't connect to adxv socket to follow collect.")
+                    logging.error("ADXV0: msg= %s" % err)
+            else:
+                logging.info(("ADXV: "+ adxv_send_fmt[1:-2]) % imgname)
+                self.adxv_socket.send(adxv_send_fmt % imgname)
+        except:
+            try:
+               del self.adxv_socket
+               self.connectVisualisation()
+            except Exception, err:
+               self.adxv_socket = None
+               logging.error("ADXV1: msg= %s" % err)
+      
     def stop_acquisition(self):
-        logging.info("<PX1 MultiCollect>  stopping acquisition ")
+        #logging.info("<PX1 MultiCollect>  stopping acquisition ")
         self.new_acquisition = False
       
     @task
@@ -197,16 +469,36 @@ class PixelDetector:
       #self.execute_command("reset_detector")
 
     #TODO: rename to stop_collect
+
     def stopCollect(self, owner):
         logging.info("<PX1 MultiCollect>  stopping ")
         if str( self.collectServer.State()) == "RUNNING":
            logging.info("<PX1 MultiCollect>  stopping collect server ")
            self.collectServer.Stop()
-        AbstractMultiCollect.stopCollect(self,owner)
 
+    def connectVisualisation(self):
+        # For ADXV visu (PL 2015_01_23).
+        #os.system("killall adxv_follow")
+        #_cl = "gnome-terminal --title ADXV_TERM "
+        #_cl += " --geometry=132x30+1680+5 -e adxv_follow &"
+        #os.system(_cl)
+        adxv_host = '127.0.0.1'
+        adxv_port = 8100
+
+        try:
+            res = socket.getaddrinfo(adxv_host, adxv_port, 0, socket.SOCK_STREAM)
+            af, socktype, proto, canonname, sa = res[0]
+            self.adxv_socket = socket.socket(af, socktype, proto)
+            self.adxv_socket.connect((adxv_host, adxv_port))
+            logging.getLogger().info("ADXV OK.") 
+        except:
+            self.adxv_socket = None
+            logging.getLogger().info("WARNING: Can't connect to ADXV.")
 
 class PilatusDetector(PixelDetector):
     pass
+
+PX1BeamlineConfig = namedtuple('PX1BeamlineConfig', BeamlineConfig._fields+('detector_radius', 'synchrotron_name',))
 
 class PX1MultiCollect(AbstractMultiCollect, HardwareObject):
     def __init__(self, name):
@@ -217,7 +509,6 @@ class PX1MultiCollect(AbstractMultiCollect, HardwareObject):
         self._detector = PilatusDetector()
         self._tunable_bl = TunableEnergy()
 
-
         self._centring_status = None
 
     def execute_command(self, command_name, *args, **kwargs): 
@@ -225,11 +516,34 @@ class PX1MultiCollect(AbstractMultiCollect, HardwareObject):
       cmd_obj = self.getCommandObject(command_name)
       return cmd_obj(*args, wait=wait)
           
+    def setBeamlineConfiguration(self, **configuration_parameters):
+        self.bl_config = PX1BeamlineConfig(**configuration_parameters)
+
+    def set_rotation_axis(self, axis):
+        logging.info("PX1 multicollect. rotation axis set to : %s" % axis)
+        self.oscaxis = axis
+        self._detector.oscaxis
+        self.collectServer.collectAxis = axis
+
     def init(self):
 
-        self.collectServer = DeviceProxy( self.getProperty("collectname"))
-        self.pilatusServer = DeviceProxy( self.getProperty("pilatusname"))
+        self.collectServer = PyTango.DeviceProxy( self.getProperty("collectname"))
+        self.pilatusServer = PyTango.DeviceProxy( self.getProperty("pilatusname"))
+        self.fluoMotor =     PyTango.DeviceProxy( self.getProperty("fluomotor"))
+        self.close_safty_shutter = self.getProperty("close_safty_shutter") 
+        
+        self.collectServer.collectAxis = "Phi"
+        self.collectServer.set_timeout_millis(5000)
 
+        self.imgtojpeg = self.getProperty("imgtojpeg")
+        self._detector.imgtojpeg = self.imgtojpeg
+        self.jpegoption = self.getProperty("jpegoption")
+        if self.jpegoption == 'allframes':
+            self._detector.jpeg_allframes = True
+
+        #self.ruche_sync_dir = self.getProperty("ruche_sync_dir")
+        self.ruche_ho = self.getObjectByRole("ruche")
+    
         self.setControlObjects(diffractometer = self.getObjectByRole("diffractometer"),
                                sample_changer = self.getObjectByRole("sample_changer"),
                                lims = self.getObjectByRole("dbserver"),
@@ -247,16 +561,21 @@ class PX1MultiCollect(AbstractMultiCollect, HardwareObject):
         kappa_hwo = self.getObjectByRole("kappa")
         phi_hwo = self.getObjectByRole("phi")
         omega_hwo = self.getObjectByRole("omega")
+        environment_hwo = self.getObjectByRole("environment")
+        self.beaminfo_hwo = self.getObjectByRole("beaminfo")
         mxlocalHO = self.getObjectByRole("beamline_configuration")
 
         bcm_pars = mxlocalHO["BCM_PARS"]
         spec_pars = mxlocalHO["SPEC_PARS"]
+        bl_pars = mxlocalHO["BEAMLINE_PARS"]
+
+        self.session_hwo = self.getObjectByRole("session")
 
         try:
           undulators = bcm_pars["undulator"]
         except IndexError:
           undulators = []
-
+            
         self.setBeamlineConfiguration(directory_prefix = self.getProperty("directory_prefix"),
                                       default_exposure_time = bcm_pars.getProperty("default_exposure_time"),
                                       default_number_of_passes = bcm_pars.getProperty("default_number_of_passes"),
@@ -269,10 +588,11 @@ class PX1MultiCollect(AbstractMultiCollect, HardwareObject):
                                       detector_fileext = bcm_pars.getProperty("FileSuffix"),
                                       detector_type = bcm_pars["detector"].getProperty("type"),
                                       detector_mode = spec_pars["detector"].getProperty("binning"),
-                                      detector_manufacturer = bcm_pars["detector"].getProperty("manufacturer"),
-                                      detector_model = bcm_pars["detector"].getProperty("model"),
-                                      detector_px = bcm_pars["detector"].getProperty("px"),
-                                      detector_py = bcm_pars["detector"].getProperty("py"),
+                                      detector_manufacturer = bcm_pars.getProperty("detector_manufacturer"),
+                                      detector_model = bcm_pars.getProperty("detector_model"),
+                                      detector_px = bcm_pars.getProperty("detector_px"),
+                                      detector_py = bcm_pars.getProperty("detector_py"),
+                                      detector_radius = bcm_pars.getProperty('detector_radius'),
                                       beam_ax = spec_pars["beam"].getProperty("ax"),
                                       beam_ay = spec_pars["beam"].getProperty("ay"),
                                       beam_bx = spec_pars["beam"].getProperty("bx"),
@@ -284,6 +604,7 @@ class PX1MultiCollect(AbstractMultiCollect, HardwareObject):
                                       beam_divergence_horizontal = bcm_pars.getProperty('beam_divergence_horizontal'),     
                                       polarisation = bcm_pars.getProperty('polarisation'),
                                       auto_processing_server = None,
+                                      synchrotron_name = bl_pars.getProperty('synchrotron_name'),
                                       input_files_server = None)
   
         self.oscaxis = self.getProperty("oscaxis")
@@ -295,6 +616,7 @@ class PX1MultiCollect(AbstractMultiCollect, HardwareObject):
         self._detector.kappa_hwo    = kappa_hwo
         self._detector.phi_hwo      = phi_hwo
         self._detector.omega_hwo    = omega_hwo
+        self._detector.environment_hwo = environment_hwo
         self._detector.oscaxis      = self.oscaxis
 
 
@@ -308,13 +630,57 @@ class PX1MultiCollect(AbstractMultiCollect, HardwareObject):
         self.emit("collectReady", (True, ))
 
     @task
-    def take_crystal_snapshots(self):
-        self.bl_control.diffractometer.takeSnapshots(wait=True)
+    def take_crystal_snapshots(self,number_of_snapshots):
+        logging.info("<PX1 MultiCollect> >>>>>>>>>>> take_crystal_snapshot % s" % number_of_snapshots)
+        #number_of_snapshots = self.bl_control.diffractometer.takeSnapshots
+        if isinstance(number_of_snapshots, bool):
+            if number_of_snapshots:
+                number_of_snapshots = 0
+        self.bl_control.diffractometer.takeSnapshots(number_of_snapshots, wait=True)
+
+    def prepare_wedges_to_collect(self, start, nframes, osc_range, reference_interval, inverse_beam, overlap):
+        # code to prepare the list of frames to collect: [(start, wedge_size), ...]
+        wedge_sizes_list = [reference_interval]*(nframes/reference_interval)
+        remaining_frames = nframes % reference_interval
+        if remaining_frames:
+            wedge_sizes_list.append(remaining_frames)
+        #print "final wedges list", wedge_sizes_list
+        wedges_to_collect = []
+        #logging.info("<PX1 MultiCollect> prepare_wedges_to_collect - wedge_sizes_list = %s" % wedge_sizes_list)
+        #logging.info("<PX1 MultiCollect> prepare_wedges_to_collect - remaining_frames = %s" % remaining_frames)
+        for wedge_size in wedge_sizes_list:
+            orig_start = start
+            
+            for i in range(wedge_size):
+              wedges_to_collect.append((start, wedge_size))
+              start += osc_range - overlap
+
+            if inverse_beam:
+              start = orig_start
+              for i in range(wedge_size):
+                wedges_to_collect.append((start+180, wedge_size))
+                start += osc_range - overlap
+
+            #if overlap:
+            #  logging.info("<PX1 MultiCollect> prepare_wedges_to_collect - overlap = %.2f" % overlap)
+            #  for i in range(wedge_size):
+            #    wedges_to_collect.append((start+180, wedge_size))
+                #start += osc_range - overlap
+
+        #logging.info("<PX1 MultiCollect> prepare_wedges_to_collect - wedges_to_collect = %s" % wedges_to_collect)
+        return wedges_to_collect
 
     @task
     def data_collection_hook(self, data_collect_parameters):
         self.dcpars = copy.copy(data_collect_parameters)
-        return
+        #logging.info("<PX1 MultiCollect> DCPARS: %s" % self.dcpars)
+        #check if pilatus fault restart pilatus by collectServer.
+        if str(self.pilatusServer.State()) == "FAULT" :
+             self.collectServer.PrepareCollect()
+        # Do Pilatus Recalibration is needed
+        self._detector.do_recalibration(self.dcpars["energy"])
+        if 'experiment_type' in self.dcpars:
+            logging.info("<PX1 MultiCollect> in data_collection_hook, experiment type: %s" % self.dcpars['experiment_type'])
  
     @task
     def set_transmission(self, transmission_percent):
@@ -324,11 +690,30 @@ class PX1MultiCollect(AbstractMultiCollect, HardwareObject):
         return self._tunable_bl.set_wavelength(wavelength)
 
     def set_energy(self, energy):
+        energy = float(energy)
+        logging.info("<PX1 MultiCollect> set_energy %.3f" % energy)
         return self._tunable_bl.set_energy(energy)
 
     @task
     def set_resolution(self, new_resolution):
-        return self.bl_control.resolution.move(new_resolution)
+        logging.info("<PX1 MultiCollect> TEST - set_resolution")
+        if abs(new_resolution - self.get_resolution()) < 0.005:
+            logging.info("<PX1 MultiCollect> set_resolution: Already OK.")
+            return self.get_resolution()
+        self.bl_control.resolution.move(new_resolution)
+        time.sleep(0.5)
+        logging.info("<PX1 MultiCollect> detector_state: %s" % \
+                           self.bl_control.detector_distance.stateValue)
+        t0 = time.time()
+        #while self.bl_control.detector_distance.stateValue in ["MOVING", "RUNNING"]:
+        while abs(new_resolution - self.get_resolution()) > 0.005:
+            time.sleep(0.1)
+            if (time.time() - t0) > 110:
+                logging.getLogger("HWR").error("<PX1 MultiCollect>  Timeout on moving RESOLUTION")
+                break
+        logging.info("<PX1 MultiCollect> detector_state: %s" % \
+                            self.bl_control.detector_distance.stateValue)
+        return self.get_resolution()
         
     @task
     def move_detector(self, detector_distance):
@@ -339,6 +724,8 @@ class PX1MultiCollect(AbstractMultiCollect, HardwareObject):
     @task
     def data_collection_cleanup(self):
         self.close_fast_shutter()
+        # self.trigger_data_sync()
+        self.ruche_ho.trigger_sync( self.current_jpeg_full_path ) 
 
     @task
     def close_fast_shutter(self):
@@ -350,6 +737,25 @@ class PX1MultiCollect(AbstractMultiCollect, HardwareObject):
             if (time.time() - t0) > 4:
                 logging.getLogger("HWR").error("Timeout on closing fast shutter")
                 break
+
+    def set_helical(self, onmode, positions=None):
+        #logging.info("<PX1 MultiCollect> set helical")
+        self.helical = onmode
+        if onmode:
+            logging.info("<PX1 MultiCollect> set helical pos1 %s pos2 %s" % (positions['1'], positions['2']))
+            self.helicalStart = positions['1']
+            self.helicalFinal = positions['2']
+
+    def set_collect_position(self, position):
+        logging.info("<PX1 MultiCollect> set collect position %s" % position)
+        logging.info("<PX1 MultiCollect> set collect position type %s" % type(position))
+        self.standard_collect = True
+        #pos = dict(position)
+        #collect_position = {} 
+        #for motor in self.motors:
+            #collect_position[motor] = pos[motor]
+
+        self.collect_position = self.bl_control.diffractometer.getPositions()
 
     @task
     def open_fast_shutter(self):
@@ -366,6 +772,7 @@ class PX1MultiCollect(AbstractMultiCollect, HardwareObject):
     def move_motors(self, motor_position_dict):
         for motor in motor_position_dict.keys(): #iteritems():
             position = motor_position_dict[motor]
+
             logging.getLogger().info("PX1 MultiCollect / move_motors: %s to %s " % (motor, position))
             if isinstance(motor, str) or isinstance(motor, unicode):
                 # find right motor object from motor role in diffractometer obj.
@@ -375,9 +782,17 @@ class PX1MultiCollect(AbstractMultiCollect, HardwareObject):
                 if motor is None:
                   continue
                 motor_position_dict[motor]=position
-
-            logging.getLogger("HWR").info("Moving motor '%s' to %f", motor.getMotorMnemonic(), position)
-            motor.move(position)
+            try:
+	        # Do not move kappa for now.
+                motor_str = str(motor.getMotorMnemonic())
+                if "kappa" in motor_str or "phi" in motor_str:
+                    logging.getLogger().info("... NOT moving motor: %s" % motor_str)
+                else:
+                    logging.getLogger().info("... moving motor '%s' to %f", motor_str, position)
+                    motor.move(position)
+            except:
+                logging.getLogger().error("PX1 MultiCollect. Error adding exception on KAPPA")
+             
 
         while any([motor.motorIsMoving() for motor in motor_position_dict.iterkeys()]):
             logging.getLogger("HWR").info("Waiting for end of motors motion")
@@ -398,24 +813,34 @@ class PX1MultiCollect(AbstractMultiCollect, HardwareObject):
 
     @task
     def close_safety_shutter(self):
-        self.bl_control.safety_shutter.closeShutter()
-        t0 = time.time()
-        while self.bl_control.safety_shutter.getShutterState() == 'opened':
-            time.sleep(0.1)
-            if (time.time() - t0) > 4:
-                logging.getLogger("HWR").error("Timeout on closing safety shutter")
-                break
+        logging.info("<PX1 MultiCollect> close_safety_shutter config: %s %s" % (self.close_safty_shutter, type(self.close_safty_shutter)))
+        if self.close_safty_shutter: 
+            logging.info("<PX1 MultiCollect> closing safetyshutter")
+	    self.bl_control.safety_shutter.closeShutter()
+            t0 = time.time()
+            while self.bl_control.safety_shutter.getShutterState() == 'opened':
+                time.sleep(0.1)
+                if (time.time() - t0) > 4:
+                    logging.getLogger("HWR").error("Timeout on closing safety shutter")
+                    break
 
     @task
     def prepare_intensity_monitors(self):
         logging.info("<PX1 MultiCollect> TODO - prepare intensity monitors")
 
     def prepare_acquisition(self, take_dark, start, osc_range, exptime, npass, number_of_images, comment=""):
+        logging.info("<PX1 MultiCollect> prepare_acquisition: start %s number_of_images %s" % (start, number_of_images))
+        try:
+            if str(self.fluoMotor.State()) == "INSERT":
+                self.fluoMotor.Extract()
+        except:
+            logging.error("<PX1 MultiCollect> Can't extract fluorescence arm")
 
+        logging.error("<PX1 MultiCollect> PREPARE_ACQ: oscaxis = %s" % self.oscaxis)
         self.collectServer.exposurePeriod = exptime
         self.collectServer.numberOfImages = number_of_images
         self.collectServer.imageWidth = osc_range
-        self.collectServer.collectAxis = self.oscaxis
+        #self.collectServer.collectAxis = self.oscaxis
         self.collectServer.startAngle = start
         self.collectServer.triggerMode = 2
 
@@ -424,15 +849,25 @@ class PX1MultiCollect(AbstractMultiCollect, HardwareObject):
         return self._detector.prepare_acquisition(take_dark, start, osc_range, exptime, npass, number_of_images, comment)
 
     def set_detector_filenames(self, frame_number, start, filename, jpeg_full_path, jpeg_thumbnail_full_path):
+        self.current_jpeg_full_path = jpeg_full_path
         return self._detector.set_detector_filenames(frame_number, start, filename, jpeg_full_path, jpeg_thumbnail_full_path)
 
     def prepare_oscillation(self, start, osc_range, exptime, npass):
         return self._detector.prepare_oscillation(start, osc_range, exptime, npass)
 
     def do_oscillation(self, start, end, exptime, npass):
+        self._detector.dcpars = self.dcpars
+        #self._detector.axis_hwo = 
         return self._detector.do_oscillation(start, end, exptime, npass)
     
     def start_acquisition(self, exptime, npass, first_frame):
+        # self.dcpars
+        try:
+            _dir_path = self.dcpars['fileinfo']['directory'].replace('RAW_DATA','PROCESSED_DATA')
+            chmod_dir(_dir_path)
+            write_goimg(_dir_path)
+        except Exception, err:
+            logging.error("<PX1 MultiCollect> in start_acquisition: %s " % err)            
         return self._detector.start_acquisition(exptime, npass, first_frame)
       
     def write_image(self, last_frame):
@@ -447,10 +882,58 @@ class PX1MultiCollect(AbstractMultiCollect, HardwareObject):
         return
 
     def reset_detector(self):
+        AbstractMultiCollect.stopCollect(self,owner=None)
         return self._detector.reset_detector()
 
+    #def prepare_input_files(self, files_directory, prefix, run_number, process_directory):
+        # What is this for ?
+    #    return ("/tmp", "/tmp", "/tmp")
+
     def prepare_input_files(self, files_directory, prefix, run_number, process_directory):
-        return ("/tmp", "/tmp", "/tmp")
+        i = 1
+
+        while True:
+          xds_input_file_dirname = "xds_%s_run%s_%d" % (prefix, run_number, i)
+          xds_directory = os.path.join(process_directory, xds_input_file_dirname)
+
+          if not os.path.exists(xds_directory):
+            break
+
+          i+=1
+
+        mosflm_input_file_dirname = "mosflm_%s_run%s_%d" % (prefix, run_number, i)
+        mosflm_directory = os.path.join(process_directory, mosflm_input_file_dirname)
+
+        #hkl2000_dirname = "hkl2000_%s_run%s_%d" % (prefix, run_number, i)
+        #hkl2000_directory = os.path.join(process_directory, hkl2000_dirname)
+
+        self.raw_data_input_file_dir = os.path.join(files_directory, "process", xds_input_file_dirname)
+        self.mosflm_raw_data_input_file_dir = os.path.join(files_directory, "process", mosflm_input_file_dirname)
+        #self.raw_hkl2000_dir = os.path.join(files_directory, "process", hkl2000_dirname)
+
+        for dir in (self.raw_data_input_file_dir, xds_directory):
+          self.create_directories(dir)
+          logging.info("Creating XDS processing input file directory: %s", dir)
+          os.chmod(dir, 0777)
+        for dir in (self.mosflm_raw_data_input_file_dir, mosflm_directory):
+          self.create_directories(dir)
+          logging.info("Creating MOSFLM processing input file directory: %s", dir)
+          os.chmod(dir, 0777)
+        #for dir in (self.raw_hkl2000_dir, hkl2000_directory):
+        #  self.create_directories(dir)
+        #  os.chmod(dir, 0777)
+ 
+        try: 
+          try: 
+              os.symlink(files_directory, os.path.join(process_directory, "links"))
+          except os.error, e:
+              if e.errno != errno.EEXIST:
+                  raise
+        except:
+            logging.exception("Could not create processing file directory")
+
+        return xds_directory, mosflm_directory, None
+
 
     @task
     def write_input_files(self, collection_id):
@@ -461,7 +944,7 @@ class PX1MultiCollect(AbstractMultiCollect, HardwareObject):
       
     def get_detector_distance(self):
         logging.info("<PX1 MultiCollect> TODO - get detector distance")
-        return
+        return self.bl_control.detector_distance.getPosition()
        
     def get_resolution(self):
         return self.bl_control.resolution.getPosition()
@@ -470,13 +953,16 @@ class PX1MultiCollect(AbstractMultiCollect, HardwareObject):
         return self.bl_control.transmission.getAttFactor()
 
     def get_undulators_gaps(self):
+        logging.info("<PX1 MultiCollect> TODO - get undulators gaps" )
+        return ['9999','9999']
+
         all_gaps = {'Unknown': None}
-        _gaps = {}
         try:
             _gaps = self.bl_control.undulators.getUndulatorGaps()
         except:
             logging.getLogger("HWR").exception("Could not get undulator gaps")
         all_gaps.clear()
+
         for key in _gaps:
             if  '_Position' in key:
                 nkey = key[:-9]
@@ -486,58 +972,79 @@ class PX1MultiCollect(AbstractMultiCollect, HardwareObject):
         return all_gaps
 
     def get_resolution_at_corner(self):
-        logging.info("<PX2 MultiCollect> TODO - get resolution at corner" )
-        return
+
+        logging.info("<PX1 MultiCollect> get resolution at corner" )
+
+        radius = self.bl_config.detector_radius  / 1000.0 # meters
+        detdist =  self.get_detector_distance() / 1000.0 # meters
+        wavelength = self.get_wavelength() # angtroms
+        logging.info("<PX1 MultiCollect> get resolution at corner: w: %s detdist: %s radius: %s"% (wavelength, detdist, radius))
+        angle = math.atan( math.sqrt(2)*radius/detdist) 
+        resatcorner = wavelength / (2*math.sin(0.5*angle))
+        return resatcorner
 
     def get_beam_size(self):
-        logging.info("<PX2 MultiCollect> TODO - get beam size" )
-        return (None,None)
+        _beam_info = self.beaminfo_hwo.get_beam_info()
+        logging.info("<PX1 MultiCollect> get beam size %s" % _beam_info)
+        return (_beam_info['size_x'], _beam_info['size_y'])
 
     def get_slit_gaps(self):
-        logging.info("<PX2 MultiCollect> TODO - get slit gaps" )
-        return 
+        logging.info("<PX1 MultiCollect> TODO - get slit gaps" )
+        return (-1,-1)
 
     def get_beam_shape(self):
-        logging.info("<PX2 MultiCollect> TODO - get beam shape" )
-        return 
+        logging.info("<PX1 MultiCollect> TODO - get beam shape" )
+        return "rectangular"
     
     def get_measured_intensity(self):
-        logging.info("<PX2 MultiCollect> TODO - get measured intensity" )
+        logging.info("<PX1 MultiCollect> TODO - get measured intensity" )
         try:
            val = self.getChannelObject("image_intensity").getValue()
            return float(val)
         except:
-           return 0
+           return -1
 
     def get_machine_current(self):
-        if self.bl_control.machine_current:
+        if self.bl_control.machine_current is not None:
             return self.bl_control.machine_current.getCurrent()
         else:
-            return 0
+            return -1
 
     def get_machine_message(self):
-        if  self.bl_control.machine_current:
-            return self.bl_control.machine_current.getMessage()
+        logging.info("<PX1 MultiCollect> getting machine message" )
+        if  self.bl_control.machine_current is not None:
+            logging.info("<<<<<<<<< PX1 MultiCollect    >>>>>>>>> getting machine message %s" %  self.bl_control.machine_current.getMessage())
+            msg = self.bl_control.machine_current.getMessage()
+            try: 
+               amsg = msg.encode('ascii', 'replace')
+            except:
+               import traceback
+               logging.info("<PX1 MultiCollect> error encoding message %s" % traceback.format_exc())
+               amsg = "err getting message"
+            return amsg
         else:
-            return ''
+            return 'Not implemented yet'
 
     def get_machine_fill_mode(self):
-        if self.bl_control.machine_current:
+        logging.info("<PX1 MultiCollect> getting machine fill mode %s" % \
+                               self.bl_control.machine_current.getFillMode())
+        if self.bl_control.machine_current is not None:
             return self.bl_control.machine_current.getFillMode()
         else:
-            ''
+            'Not implemented yet'
 
     def get_cryo_temperature(self):
-        logging.info("<PX2 MultiCollect> TODO - get cryo temperature" )
-        return
+        logging.info("<PX1 MultiCollect> TODO - get cryo temperature" )
+        return -1 
         #return self.bl_control.cryo_stream.getTemperature()
 
     def getCurrentEnergy(self):
         return self._tunable_bl.getCurrentEnergy()
 
     def get_beam_centre(self):
-        logging.info("<PX2 MultiCollect> TODO - get beam centre" )
-        return
+        logging.info("<PX1 MultiCollect> TODO - get beam centre" )
+        return (999,999)
+
         #return (self.execute_command("get_beam_centre_x"), self.execute_command("get_beam_centre_y"))
     
     def getBeamlineConfiguration(self, *args):
@@ -569,8 +1076,8 @@ class PX1MultiCollect(AbstractMultiCollect, HardwareObject):
         return self.bl_config.directory_prefix
 
     def store_image_in_lims(self, frame, first_frame, last_frame):
-        if isinstance(self._detector, CcdDetector):
-            return True
+        #if isinstance(self._detector, CcdDetector):
+            #return True
 
         if isinstance(self._detector, PixelDetector):
             if first_frame or last_frame:
@@ -578,8 +1085,7 @@ class PX1MultiCollect(AbstractMultiCollect, HardwareObject):
 
     def get_flux(self):
         logging.info("<PX1 MultiCollect> TODO - get flux")
-        return 10e12
-        #return self.bl_control.flux.getCurrentFlux()
+        return self.bl_control.flux.getCurrentFlux()
 
     """
     getOscillation
@@ -616,22 +1122,43 @@ class PX1MultiCollect(AbstractMultiCollect, HardwareObject):
 
 
     def get_archive_directory(self, directory):
-        res = None
        
-        logging.getLogger().info("<PX1 MultiCollect> TODO - get archive directory (using /tmp for now)")
-        return "/tmp"
+        archive_dir = self.session_hwo.get_archive_directory(directory)
+        logging.getLogger().info("<PX1 MultiCollect> - get archive directory (using %s)" % archive_dir)
 
-        dir_path_list = directory.split(os.path.sep)
-        try:
-          suffix_path=os.path.join(*dir_path_list[4:])
-        except TypeError:
-          return None
-        else:
-          if 'inhouse' in directory:
-            archive_dir = os.path.join('/data/pyarch/', dir_path_list[2], suffix_path)
-          else:
-            archive_dir = os.path.join('/data/pyarch/', dir_path_list[4], dir_path_list[3], *dir_path_list[5:])
-          if archive_dir[-1] != os.path.sep:
-            archive_dir += os.path.sep
-            
-          return archive_dir
+        return archive_dir 
+
+    def trigger_data_sync(self):
+        logging.getLogger().info("<PX1 MultiCollect> - triggering data sync ")
+        ruche_info = self.session_hwo.get_ruche_info( self.current_jpeg_full_path ) 
+
+        sync_file = time.strftime("%Y_%m_%d-%H_%M_%S", time.localtime(time.time()))
+        sync_file_path = os.path.join( self.ruche_sync_dir, sync_file )
+        open(sync_file_path,"w").write( ruche_info )
+
+def test():
+    import os
+    hwr_directory = os.environ["XML_FILES_PATH"]
+
+    hwr = HardwareRepository.HardwareRepository(os.path.abspath(hwr_directory))
+    hwr.connect()
+
+    coll = hwr.getHardwareObject("/mxcollect")
+
+    #print "Machine current is ", coll.get_machine_current()
+    print "Synchrotron name is ", coll.bl_config.synchrotron_name
+    #res_corner = coll.get_resolution_at_corner()
+    #print "Resolution corner is ", res_corner
+    #print coll._detector.jpeg_allframes 
+ 
+    #coll.current_jpeg_full_path = "/data1-1/test/visitor/mx2014/px1/20150122/ARCHIVE/genthumb5_1_0001.jpg"
+    #coll.trigger_data_sync()
+
+    time.sleep(2)
+    coll._detector.adxv_sync("/data1-1/test/visitor/mx2014/px1/20150123/RAW_DATA/ruchetest_3_0003.cbf")
+    time.sleep(2)
+    coll._detector.adxv_sync("/data1-1/test/visitor/mx2014/px1/20150123/RAW_DATA/ruchetest_3_0002.cbf")
+
+if __name__ == '__main__':
+   test()
+

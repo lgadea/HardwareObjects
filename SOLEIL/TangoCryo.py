@@ -27,7 +27,7 @@ class TangoCryo(BaseHardwareObjects.Device):
         #
         # emit signal
         #
-        self.temp = 100 #value
+        self.temp = value
         self.emit('temperatureChanged', value)
 
 

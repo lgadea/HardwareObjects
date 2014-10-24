@@ -8,7 +8,11 @@ from matplotlib.backends.backend_agg import FigureCanvasAgg
 import os
 import time
 import types
+<<<<<<< HEAD
 import math
+=======
+import logging
+>>>>>>> Commit at the end of Bixente's visit
 import gevent
 
 <<<<<<< HEAD:SOLEIL/EnergyScanPX1.py
@@ -267,7 +271,7 @@ class EnergyScan(Equipment):
                         session_id = None, 
                         blsample_id = None):
         
-        logging.getLogger("HWR").debug('EnergyScan:startEnergyScan')
+        #logging.getLogger("HWR").debug('EnergyScan:startEnergyScan')
         print 'edge', edge
         print 'element', element
         print 'directory', directory
@@ -476,6 +480,7 @@ class EnergyScan(Equipment):
         savpk = pk
         ip=ip/1000.0
         comm = ""
+<<<<<<< HEAD
         logging.getLogger("HWR").info("th. Edge %s ; chooch results are pk=%f, ip=%f, rm=%f" % (self.thEdge, pk,ip,rm))
 
         if math.fabs(self.thEdge - ip) > self.thEdgeThreshold:
@@ -487,6 +492,22 @@ class EnergyScan(Equipment):
           logging.getLogger("HWR").warning('EnergyScan: calculated peak (%f) is more that 20eV %s the theoretical value (%f). Please check your scan and choose the energies manually' % (savpk, (self.thEdge - ip) > 0.02 and "below" or "above", self.thEdge))
 
         archiveEfsFile=os.path.extsep.join((scanArchiveFilePrefix, "efs"))
+=======
+        logging.getLogger("HWR").info("th. Edge %s ; chooch results are pk=%f, ip=%f, rm=%f" % (self.thEdge,  pk, ip, rm))
+        if abs(self.thEdge - ip) > 0.01:
+            pk = 0
+            ip = 0
+            rm = self.thEdge + 0.05
+            comm = 'Calculated peak (%f) is more that 10eV away from the theoretical value (%f). Please check your scan' % (savpk, self.thEdge)
+    
+            logging.getLogger("HWR").warning('EnergyScan: calculated peak (%f) is more that 10eV %s the theoretical value (%f). Please check your scan and choose the energies manually' % (savpk, (self.thEdge - ip) > 0.01 and "below" or "above", self.thEdge))
+        
+        #self.parent.pk = pk
+        #self.parent.ip = ip
+        #self.parent.rm = rm 
+        scanFile = filenameIn
+        archiveEfsFile = filenameOut #os.path.extsep.join((scanArchiveFilePrefix, "efs"))
+>>>>>>> Commit at the end of Bixente's visit
         try:
           fi=open(scanFile)
           fo=open(archiveEfsFile, "w")
@@ -749,13 +770,48 @@ class EnergyScan(Equipment):
             pass
         return energies
 
+<<<<<<< HEAD
 def StoreEnergyScanThread(db_conn, scan_info):
     scanInfo = dict(scan_info)
     dbConnection = db_conn
+=======
+        e_edge, roi_center = self.getEdgefromXabs(element, edge)
+        self.thEdge = e_edge
+        self.element = element
+        self.edge = edge
+        
+        print 'e_edge = %5.4f , roi_center = %5.4f' %(e_edge, roi_center) 
+        
+        filenameIn = self.getFilename(directory, filename, element, edge) # filenameIn
+        self.filenameIn = filenameIn
+        
+        # Demarrage du thread de scan
+        self.scanCommandStarted()
+        self.pk = None
+        self.ip = None
+        self.scanThread = EnergyScanThread(self,
+                                           e_edge,
+                                           roi_center,
+                                           filenameIn)
+        self.scanThread.start()
+
+    def getEdgefromXabs(self, el, edge):
+        edge = edge.upper()
+        roi_center = McMaster[el]['edgeEnergies'][edge + '-alpha']
+        if edge == 'L':
+            edge = 'L3'
+        e_edge = McMaster[el]['edgeEnergies'][edge]
+        return (e_edge, roi_center)    
+        
+    def newPoint(self, x, y):
+        #logging.getLogger("HWR").debug('EnergyScan:newPoint')
+        print 'newPoint', x, y
+        self.emit('addNewPoint', (x, y))
+>>>>>>> Commit at the end of Bixente's visit
     
 <<<<<<< HEAD:SOLEIL/EnergyScanPX1.py
     def newScan(self,scanParameters):
-        logging.getLogger("HWR").debug('EnergyScan:newScan')
+        #logging.getLogger("HWR").debug('EnergyScan:newScan')
         self.emit('newScan', (scanParameters,))
         
     def startMoveEnergy(self, value):   # Copie du code ecrit dans BLEnergy.py pour gestion du backlash onduleur.

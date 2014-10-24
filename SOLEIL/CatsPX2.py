@@ -120,6 +120,10 @@ class CatsPX2(SampleChanger):
         if self._lidStatus is not None:
             self._lidStatus.connectSignal("update", self._updateOperationMode)
 
+        self._softAutho = self.getChannelObject("softwareAuthorization")
+        if self._softAutho is not None:
+            self._softAutho.connectSignal("update", self._softwareAuthorization)
+
         self._initSCContents()
 
         # SampleChanger.init must be called _after_ initialization of the Cats because it starts the update methods which access
@@ -310,6 +314,9 @@ class CatsPX2(SampleChanger):
 
     def _updateOperationMode(self, value):
         self._scIsCharging = not value
+
+    def _softwareAuthorization(self, value):
+        self.emit("softwareAuthorizationChanged", (value,))
 
     def _executeServerTask(self, method, *args):
         """

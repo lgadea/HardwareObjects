@@ -20,10 +20,8 @@ import time
 import gevent
 
 from HardwareRepository.TaskUtils import *
-
 from HardwareRepository import HardwareRepository
 from HardwareRepository.BaseHardwareObjects import Equipment
-
 __author__ = "Bixente Rey Bakaikoa"
 __credits__ = ["The MxCuBE collaboration"]
 
@@ -289,7 +287,6 @@ class PX1Cats(SampleChanger):
         :returns: None
         :rtype: None
         """
-        #logging.info("XXXXXXXXXXXXXXXXXXXXXXXXXxxxxxxxxxxxxxxxxxxx PX1Cats _doLoad" )
         selected=self.getSelectedSample()            
         if sample is not None:
             if sample != selected:
@@ -315,10 +312,12 @@ class PX1Cats(SampleChanger):
 
         if not self.environment.readyForTransfer():
              self.environment.setPhase(EnvironmentPhase.TRANSFER)
+
         if self.hasLoadedSample():
             if selected==self.getLoadedSample():
                 raise Exception("The sample " + str(self.getLoadedSample().getAddress()) + " is already loaded")
             else:
+
                 self._executeServerTask(self._cmdChainedLoad, "Exchange", states=[SampleChangerState.Ready,], argin=argin)
         else:
                 self._executeServerTask(self._cmdLoad, "Load", states=[SampleChangerState.Ready,], argin=argin)
@@ -334,7 +333,6 @@ class PX1Cats(SampleChanger):
             logging.getLogger("user_level_log").info("CATS: Load/Unload Error. Please try again.")
             self.emit('loadError', incoherentSample)
           
-            
     def _doUnload(self,sample_slot=None):
         """
         Unloads a sample from the diffractometer.
@@ -383,9 +381,6 @@ class PX1Cats(SampleChanger):
         if self.infomode:
             logging.warning("PX1Cats. It is in info mode only. Command %s ignored" % taskname)
             return 
-        #self._waitDeviceReady(3.0)
-        #if states == None:
-        #    states = [SampleChangerState.Ready, SampleChangerState.StandBy]
 
         self._waitDeviceState( states, 3.0 )
 
@@ -394,6 +389,7 @@ class PX1Cats(SampleChanger):
         else:
            task_id = method(argin)
 
+
         self.task_started = time.time()
         self.task_name = taskname
 
@@ -401,6 +397,7 @@ class PX1Cats(SampleChanger):
         if task_id is None: #Reset
             while self._isDeviceBusy():
                 gevent.sleep(0.1)
+
             #state = self._readState()
         else:
             self._pathRunning(10.0)
@@ -413,7 +410,6 @@ class PX1Cats(SampleChanger):
     def _pathRunning(self,timeout=None):
         """
         Waits until the path running is true
-
         :returns: None
         :rtype: None
         """
@@ -453,7 +449,6 @@ class PX1Cats(SampleChanger):
         """
 
         state = self._chnState.getValue()
-       
         if state is not None:
             stateStr = str(state).upper()
         else:
@@ -754,6 +749,7 @@ class PX1Cats(SampleChanger):
         :returns: None
         :rtype: None
         """
+
         #if not self.environment.readyForTransfer():
         #     self.environment.setPhase(EnvironmentPhase.TRANSFER)
         
@@ -907,7 +903,6 @@ class PX1Cats(SampleChanger):
             if not self._waitDeviceReady() and not homeOpened:
                 self._cmdDrySoak()  
         
-
     def _updateAckSampleMemory(self, value=None):
         logging.info("PX1Cats1. UpdateAckSampleMemory: %s" % value)
         if value is None:
@@ -918,7 +913,6 @@ class PX1Cats(SampleChanger):
             self.emit('loadError', value)
         
 	self._incoherentGonioSampleState = value
-
 
 def main():
     # create the xanes object

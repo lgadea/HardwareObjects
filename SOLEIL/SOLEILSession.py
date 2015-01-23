@@ -3,6 +3,7 @@ import os, time, logging
 from HardwareRepository import HardwareRepository
 
 import Session
+import queue_model_objects_v1 as queue_model_objects
 
 class SOLEILSession(Session.Session):
 
@@ -13,10 +14,17 @@ class SOLEILSession(Session.Session):
         self.uid = ''
         self.projuser = ''
 
+    def init(self):
+        Session.Session.init(self)
+        queue_model_objects.PathTemplate.set_archive_translation( self.get_archive_directory )
+
     def path_to_ispyb(self, path):
         ispyb_base = self["file_info"].getProperty('ispyb_base_directory') % {'projuser': self.projuser}
         path = path.replace( self["file_info"].getProperty('base_directory'), ispyb_base )
         return path
+
+    def get_beamline_name(self):
+        return self.getProperty("beamline_name")
 
     def set_user_info(self, username, user_id, group_id, projuser=None ):
         logging.debug("SESSION - User %s logged in. gid=%s / uid=%s " % (username,group_id,user_id))
@@ -31,12 +39,11 @@ class SOLEILSession(Session.Session):
                   available
         :rtype: str
         """
-
         if self.proposal_number:
              return "%s" % (self.proposal_number)
         else:
              return "local-user"
-
+	     
     def get_base_data_directory(self):
         """
         Returns the base data directory taking the 'contextual'
@@ -53,7 +60,7 @@ class SOLEILSession(Session.Session):
             start_time = self.session_start_date.split(' ')[0] #.replace('-', '')
         else:
             # PL. To avoid mixing users directory if they restart the application
-            # after midnight but before 8 AM, the directory date doesn't change:
+            # after midnight but before 7 AM, the directory date doesn't change:
             _local_time = time.localtime()
             if _local_time[3] > 7:
                 start_time = time.strftime("%Y-%m-%d")
@@ -66,7 +73,7 @@ class SOLEILSession(Session.Session):
             #directory = os.path.join(self.base_directory, self.endstation_name,
             #                         self.get_user_category(), self.get_proposal(),
             #                         start_time)
-            directory = os.path.join(self.base_directory, start_time, self.proposal_number, self.get_proposal_number())	    
+            directory = os.path.join(self.base_directory, start_time, self.get_proposal_number())	    
         else:
             #directory = os.path.join(self.base_directory, self.get_user_category(),
             #                         self.get_proposal(), self.endstation_name,
@@ -88,7 +95,7 @@ class SOLEILSession(Session.Session):
     #        thedir = os.path.join(thedir, 'ARCHIVE')
     #    return thedir
 
-    def get_archive_directory(self, directory=None):
+    def get_archive_directory(self, directory=None, *args):
         if directory is None:
             thedir = self.get_base_data_directory()
         else:
@@ -108,7 +115,11 @@ class SOLEILSession(Session.Session):
         else:
            usertype = 'users'
 
-        basedir = os.path.dirname( path )
+        if not os.path.isdir(path):
+           basedir = os.path.dirname( path )
+        else:
+           basedir = path
+
         ruchepath = basedir.replace( self["file_info"].getProperty('base_directory'), '' )
         if ruchepath and ruchepath[0] == os.path.sep:
             ruchepath = ruchepath[1:]
@@ -128,7 +139,7 @@ def test():
 
     sess.set_user_info('mx2014', '143301', '14330', '20100023')
 
-    path = "/927bis/ccd/2015_Run2/visitor/mx2014/px2/20150120/ARCHIVE/mx2014/mx2014_2_4.snapshot.jpeg"
+    path = "/data1-1/test/visitor/mx2014/px1/20150120/ARCHIVE/mx2014/mx2014_2_4.snapshot.jpeg"
     ispyb_path = sess.path_to_ispyb(path)
  
     print path

@@ -4,6 +4,7 @@ import logging
 import urllib2
 import os
 from cookielib import CookieJar
+from qt import *
 
 from suds.transport.http import HttpAuthenticated
 from suds.client import Client
@@ -28,7 +29,6 @@ class SOLEILISPyBClient(ISPyBClient2.ISPyBClient2):
         self.ws_collection = self.getProperty('ws_collection')
         self.ws_shipping = self.getProperty('ws_shipping')
         self.ws_tools = self.getProperty('ws_tools')
-        
         logging.debug("Initializing SOLEIL ISPyB Client")
         logging.debug("   - using http_proxy = %s " % os.environ['http_proxy'])
 
@@ -42,16 +42,18 @@ class SOLEILISPyBClient(ISPyBClient2.ISPyBClient2):
                     self._tools_ws = self._wsdl_tools_client()
 
                 except: 
-                    import traceback
-                    print traceback.print_exc()
+                    #import traceback
+                    #print traceback.print_exc()
                 #except URLError:
-                    print "URLError"
-                    logging.getLogger("ispyb_client")\
-                        .exception(_CONNECTION_ERROR_MSG)
+                    #print "URLError"
+                    logging.getLogger("user_level_log")\
+                        .warning(_CONNECTION_ERROR_MSG)
+                    #logging.getLogger("ispyb_client")\
+                    #    .exception(_CONNECTION_ERROR_MSG)
                     return
         except:
-            import traceback
-            print traceback.print_exc()
+            #import traceback
+            #print traceback.print_exc()
             logging.getLogger("ispyb_client").exception(_CONNECTION_ERROR_MSG)
             return
  
@@ -82,14 +84,16 @@ class SOLEILISPyBClient(ISPyBClient2.ISPyBClient2):
             #import traceback
             #traceback.print_exc()
 
-        self.beamline_name = self.session_hwobj.beamline_name
-
+        self.beamline_name = self.get_beamline_name()
     def translate(self, code, what):  
         """
         Given a proposal code, returns the correct code to use in the GUI,
         or what to send to LDAP, user office database, or the ISPyB database.
         """
         return code
+
+    def get_beamline_name(self):
+        return self.session_hwobj.get_beamline_name()
 
     def _wsdl_shipping_client(self):
         return self._wsdl_client(self.ws_shipping)
@@ -107,7 +111,9 @@ class SOLEILISPyBClient(ISPyBClient2.ISPyBClient2):
         url_opener = urllib2.build_opener(urllib2.HTTPCookieProcessor(cj))
 
         trans = HttpAuthenticated(username = self.ws_username, password = self.ws_password)
-        print '_wsdl_client %s' % service_name, trans
+
+        logging.info("   - using '_wsdl_client %s : %s ' " % (service_name, trans))
+        
         trans.urlopener = url_opener
         urlbase = service_name + "?wsdl"
         locbase = service_name
@@ -124,6 +130,17 @@ class SOLEILISPyBClient(ISPyBClient2.ISPyBClient2):
 
     def prepare_collect_for_lims(self, mx_collect_dict):
         # Attention! directory passed by reference. modified in place
+
+        prop = 'EDNA_files_dir' 
+        path = mx_collect_dict[prop]
+        ispyb_path = self.session_hwobj.path_to_ispyb( path )
+        mx_collect_dict[prop] = ispyb_path
+
+        #prop = 'process_directory' 
+        #path = mx_collect_dict['fileinfo'][prop] 
+        #ispyb_path = self.session_hwobj.path_to_ispyb( path )
+        #logging.info("----*-*-*----: %s to %s" % (path, ispyb_path)) 
+        #mx_collect_dict['fileinfo'][prop] = ispyb_path
 
         for i in range(4):
             try: 
@@ -153,7 +170,7 @@ def test():
 
     db = hwr.getHardwareObject("/dbconnection")
     proposal_code = 'mx'
-    proposal_number = '20140088' #'20100023'
+    proposal_number = '20100023' #'20140088' #'20100023'
     
     info = db.get_proposal(proposal_code, proposal_number)# proposal_number)
     print info

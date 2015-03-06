@@ -1,31 +1,37 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
+from HardwareRepository import HardwareRepository
+from HardwareRepository import BaseHardwareObjects
+
 from xabs_lib import McMaster
 import time
 import threading
 import logging
-import matplotlib.pyplot as plt
+#import matplotlib.pyplot as plt
 import numpy
 import commands
 import pickle
 import math
 import os
+import logging
+import PyTango
 
-class xanes(object):
+class Xanes(BaseHardwareObjects.Device):
+
     cutoff = 4
     
-    def __init__(self, parent,
+    def setup(self, parent,
                  element,
                  edge,
                  directory='/tmp/testXanes',
                  prefix='x5',
                  session_id=None,
                  blsample_id=None,
-                 nbSteps=100,
-                 roiwidth=0.25,
-                 beforeEdge=0.05,
-                 afterEdge=0.05,
+                 nbSteps=80,
+                 roiwidth=0.30,
+                 beforeEdge=0.035,
+                 afterEdge=0.045,
                  integrationTime=1,
                  peakingTime=2.5,
                  dynamicRange=20000, #47200
@@ -40,9 +46,9 @@ class xanes(object):
                  transmission_max=0.05,
                  epsilon=1e-4,
                  channelToeV=10.,
-                 test=True,
+                 test=False,
                  save=True,
-                 plot=True,
+                 plot=False,
                  expert=False):
 
         # initialize logging
@@ -69,7 +75,6 @@ class xanes(object):
         self.blsample_id = blsample_id
         self.getAbsEm()
         self.scanRange = float(afterEdge + beforeEdge)
-        self.testFile = testFile
         self.epsilon = epsilon
         
         # conversion between energy and channel
@@ -77,38 +82,69 @@ class xanes(object):
 
         # state variables
         self.stt = None
-        self.test = test
         self.save = save
         self.plot = plot
         self.Stop = False
         self.Abort = False
         self.newPoint = False
         self.expert = expert
+       
         #test specifics
-        if self.test:
+        if self.getProperty("mode") == 'test':
             self.integrationTime = 0.01
-            
-    def initializeDevices(self):
+        logging.info('Xanes_HO. In Setup method.')
+
+
+    def init(self):
         # Initialize all the devices used throughout the collect
-        from PyTango import DeviceProxy as dp
+
         self.stt = 'Init'
-        if self.test is True: 
+
+        self.raw = []
+        self.e_edge = ''
+
+        self.fluodet = self.getObjectByRole("fluodet")
+
+        if self.mode == 'test': 
+            self.integrationTime = 0.01
+            self.test = True
+            self.testFile = self.testdata
             return
-        self.fluodet = dp('i11-ma-cx1/dt/dtc-mca_xmap.1')
-        logging.info('initializing fluodet %s ' % self.fluodet)
-        self.mono = dp('i11-ma-c03/op/mono1')
-        self.monoFine = dp('i11-ma-c03/op/mono1-mt_rx')
-        self.undulator = dp('ans-c11/ei/m-u24_energy')
-        self.ble = dp('i11-ma-c00/ex/beamlineenergy')
-        self.safetyShutter = dp('i11-ma-c04/ex/obx.1')
-        self.md2 = dp('i11-ma-cx1/ex/md2')
-        self.diode1 = dp('i11-ma-c04/dt/xbpm_diode.1')
-        self.diode3 = dp('i11-ma-c05/dt/xbpm_diode.3')
-        self.diode5 = dp('i11-ma-c06/dt/xbpm_diode.5')
-        self.cvd = dp('i11-ma-c05/dt/xbpm-cvd.1')
-        self.counter = dp('i11-ma-c00/ca/cpt.2')
-        self.pss = dp('i11-ma-ce/pss/db_data-parser')
+        else:
+            self.test = False
+
+        from PyTango import DeviceProxy as dp
+
+        self.safshut = self.getObjectByRole("safety_shutter")
+        self.fastshut = self.getObjectByRole("fast_shutter")
+
+        self.mono = dp(self.mono_dev)
+        self.monoFine = dp(self.monoFine_dev)
+        self.undulator = dp(self.undulator_dev)
+        self.ble = dp(self.ble_dev)
         
+        self.diodes = {}
+        for diode in self['diodes']:
+            name = diode.getProperty('diode') 
+            devname = diode.getProperty('devname') 
+            self.diodes[name] = dp(devname)
+
+        self.normdiode = self.getProperty('normalization_diode') 
+
+        if self.normdiode not in self.diodes:
+            logging.error("Xanes.py - normalization_diode must be in .xml and should be one of the defined diodes") 
+        #logging.error("Xanes.py - self.diodes: %s" % self.diodes) 
+ 
+        #self.counter = dp(self.counter_dev)
+        self.pss = dp(self.pss_dev)
+        
+        self.Fp = dp(self.fp_dev)
+        self.Ps_h = dp(self.ps_h_dev)
+        self.Ps_v = dp(self.ps_v_dev)
+        self.Const = dp(self.const_dev)
+
+        self.Attenuator = dp(self.attenuator_dev)
+
     def getAbsEm(self):
         self.e_edge, self.roi_center = self.getEdgefromXabs(
             self.element, self.edge)
@@ -120,26 +156,22 @@ class xanes(object):
 
     def prepare(self):
         if self.test is False:
-            self.initializeDevices()
-            logging.info('prepare fluodet is %s ' % self.fluodet)
-            self.fluodet.presettype = self.presettype
-            self.fluodet.peakingtime = self.peakingTime
-            
             self.monoFine.On()
 
         self.getAbsEm()
         self.setROI()
         
-        #self.MD2Phase(phase='DataCollection')
-        self.set_md2_phase()
+        self.set_collect_phase()
         
         self.moveBeamlineEnergy(self.e_edge)
         
         self.optimizeTransmission()
         
-        self.fluodet.presetvalue = self.integrationTime
+        if not self.test:
+            self.fluodet.set_preset( float(self.integrationTime) )
         
-        self.insertFluoDet()
+        self.fluodet.insert()
+        time.sleep(4)
         
         self.results = {}
         self.results['timestamp'] = time.time()
@@ -155,36 +187,43 @@ class xanes(object):
         self.saveRaw()
         self.chooch()
         self.saveResults()
+
         if self.test: 
             return
-        self.transmission(95)
-        self.attenuation(0)
+
         self.ble.write_attribute('energy', self.pk/1000.)
-        self.extractFluodet()
+        self.fluodet.extract()
         self.safeTurnOff(self.monoFine)
         
     def closeSafetyShutter(self):
         logging.info('Closing the safety shutter')
+
         if self.test:
             return
-        self.safetyShutter.Close()
+
+        self.safshut.closeShutter()
 
     def safeOpenSafetyShutter(self):
-        logging.info(
-            'Opening the safety shutter -- checking the hutch PSS state')
+
+        logging.info('Opening the safety shutter -- checking the hutch PSS state')
+
         if self.test: return
+
         if int(self.pss.prmObt) == 1:
-            self.safetyShutter.Open()
-            while self.safetyShutter.State().name != 'OPEN' and self.stt not in ['STOP', 'ABORT']:
+            self.safshut.openShutter()
+            while self.safshut.getShutterState() != 'opened' and self.stt not in ['STOP', 'ABORT']:
                 time.sleep(0.1)
-        logging.info(self.safetyShutter.State().name)
+
+        logging.info(self.safshut.getShutterState())
 
     def openSafetyShutter(self):
         logging.info('Opening the safety shutter')
+
         if self.test:
             return
-        while self.safetyShutter.State().name != 'OPEN' and self.stt not in ['STOP', 'ABORT']:
-            logging.info(self.safetyShutter.State().name)
+
+        while self.safshut.getShutterState() != 'opened' and self.stt not in ['STOP', 'ABORT']:
+            logging.info(self.safshut.getShutterState())
             self.safeOpenSafetyShutter()
             time.sleep(0.1)
 
@@ -201,38 +240,25 @@ class xanes(object):
         while device.state().name == 'RUNNING':
             time.sleep(.1)
 
-    def MD2Phase(self, phase='DataCollection'):
-        if self.test: return
-        self.md2.startSetPhase(phase)  # Collect phase
-        self.wait(self.md2)
-
+    # Should be adapted at each beamline
     def get_state(self):
-        for state in self.md2.motorstates:
-            if 'Moving' in state:
-                return 'Moving'
+        print "Returning global state. ADATP to your beamline"
         return 'Ready'
         
-    def set_md2_phase(self, phase_name='DataCollection'):
-        self.md2.startSetPhase(phase_name)
-        while self.md2.currentPhase != phase_name or self.get_state() != 'Ready':
-            time.sleep(0.1)
+    # Should be adapted at each beamline
+    def set_collect_phase(self, phase_name='DataCollection'):
+        print "Setting gonio phase. STUB"
             
-    def insertFluoDet(self):
-        if self.test: return
-        self.md2.write_attribute('FluoDetectorIsBack', 0)  # Move detector In
-        time.sleep(4)
-
-    def extractFluodet(self):
-        if self.test: return
-        self.md2.write_attribute('FluoDetectorIsBack', 1)  # Move detector Out
-        
+    # Should be adapted at each beamline
     def get_calibration(self):
+        print "obtaining calibration. ADAPT to your beamline"
         A = -0.0161723871876
         C = 0.0
         B = 0.00993475667754
         return A, B, C
         
     def setROI(self):
+        #self.fluodet.set_roi
         if self.test: return
         A, B, C = self.get_calibration()
         self.roi_center += A # A + B*self.roi_center + C*self.roi_center**2
@@ -247,34 +273,31 @@ class xanes(object):
         self.channel_debut = channel_debut
         self.roi_debut = roi_debut
         self.roi_fin = roi_fin
-        self.fluodet.setROIs(numpy.array((channel_debut, channel_fin)))
+        logging.info('XANES: setROI chanel start %d end %d' % (channel_debut, channel_fin))
+        self.fluodet.set_roi(channel_debut, channel_fin)
 
+    # You may want to adapt to your beamline in PX1Xanes
     def transmission(self, x=None):
         '''Get or set the transmission'''
         if self.test: return 0
-        from PyTango import DeviceProxy
-        Fp = DeviceProxy('i11-ma-c00/ex/fp_parser')
         if x == None:
-            return Fp.TrueTrans_FP
-
-        Ps_h = DeviceProxy('i11-ma-c02/ex/fent_h.1')
-        Ps_v = DeviceProxy('i11-ma-c02/ex/fent_v.1')
-        Const = DeviceProxy('i11-ma-c00/ex/fpconstparser')
+            return self.Fp.TrueTrans_FP
 
         truevalue = (2.0 - math.sqrt(4 - 0.04 * x)) / 0.02
 
         newGapFP_H = math.sqrt(
-            (truevalue / 100.0) * Const.FP_Area_FWHM / Const.Ratio_FP_Gap)
-        newGapFP_V = newGapFP_H * Const.Ratio_FP_Gap
+            (truevalue / 100.0) * self.Const.FP_Area_FWHM / self.Const.Ratio_FP_Gap)
+        newGapFP_V = newGapFP_H * self.Const.Ratio_FP_Gap
 
-        Ps_h.gap = newGapFP_H
-        Ps_v.gap = newGapFP_V
+        self.Ps_h.gap = newGapFP_H
+        self.Ps_v.gap = newGapFP_V
 
+    # You may want to adapt to your beamline in PX1Xanes
     def attenuation(self, x=None):
-        '''Read or set the attenuation'''
+        '''Read or set the attenuation (for PX2)'''
         if self.test: return 0
-        from PyTango import DeviceProxy
-        Attenuator = DeviceProxy('i11-ma-c05/ex/att.1')
+        
+        # PX2
         labels = ['00 None',
                   '01 Carbon 200um',
                   '02 Carbon 250um',
@@ -286,19 +309,23 @@ class xanes(object):
                   '10 Ref Fe 5um',
                   '11 Ref Pt 5um']
         if x == None:
-            status = Attenuator.Status()
+            status = self.Attenuator.Status()
             print 'status', status
             status = status[:status.index(':')]
             value = status
             return value
         NumToLabel = dict([(int(l.split()[0]), l) for l in labels])
-        Attenuator.write_attribute(NumToLabel[x], True)
-        self.wait(Attenuator)
+        self.Attenuator.write_attribute(NumToLabel[x], True)
+        self.wait(self.Attenuator)
 
     def getEdgefromXabs(self, element, edge):
+        logging.getLogger("HWR").info('XANES: element= %s  edge= %s' % (element, edge))
         edge = edge.upper()
-        roi_center = McMaster[element]['edgeEnergies'][edge + '-alpha']
-        if edge == 'L':
+        if edge[0] == 'K':
+            roi_center = McMaster[element]['edgeEnergies']['K-alpha']
+        elif edge[0] == 'L':
+            roi_center = McMaster[element]['edgeEnergies']['L-alpha']       
+        if edge[0] == 'L':
             edge = 'L3'
         e_edge = McMaster[element]['edgeEnergies'][edge]
 
@@ -346,6 +373,12 @@ class xanes(object):
         points = self.getBLEPoints()
         return self._pointsToStrings(points)
         
+    def getRawData(self):
+        return self.raw
+
+    def getElementEdge(self):
+        return self.e_edge
+
     def getBleVsEn(self):
         print 'inside getBleVsEn'
         ens_floats = self.getObservationPoints()
@@ -376,14 +409,14 @@ class xanes(object):
         self.wait(self.mono)
 
     def setBLE(self, energy):
-        logging.info('setBLE')
+        #logging.info('setBLE')
         if self.test: return                                   
         if abs(self.ble.read_attribute('energy').w_value - self.BleVsEnStrings[energy]) > 0.001:
-            print 'setting undulator energy', energy
-            print 'self.BleVsEn[energy]', self.BleVsEnStrings[energy]
+            logging.info('XANES: Setting undulator energy %.4f' % float(energy))
+            logging.info('self.BleVsEn[energy] %.4f ' % self.BleVsEnStrings[energy])
             self.ble.write_attribute('energy', self.BleVsEnStrings[energy])
             self.wait(self.ble)
-            if self.undulatorOffset != 0:
+            if self.undulatorOffset:
                 self.undulator.gap += self.undulatorOffset
                 self.wait(self.undulator)
             
@@ -404,8 +437,15 @@ class xanes(object):
         self.Abort = True
         self.stt = 'Abort'
         if self.test: return
-        self.md2.FastShutterIsOpen = False #CloseFastShutter()
+
+        self.closeFastShutter()
     
+    def openFastShutter(self):
+        self.fastshut.openShutter()
+
+    def closeFastShutter(self):
+        self.fastshut.closeShutter()
+
     def start(self):
         logging.info('scan thread')
         self.scanThread = threading.Thread(target=self.scan)
@@ -415,6 +455,8 @@ class xanes(object):
     def optimizeTransmission(self):
         logging.info('Optmizing transmission')
         if self.test: return
+    
+        # REVISE / PX2
         import XfeCollect
         xfe = XfeCollect.XfeCollect()
         xfe.optimizeTransmission(self.element, self.edge)
@@ -493,36 +535,49 @@ class xanes(object):
         if self.test:
             time.sleep(self.integrationTime)
             return
-        self.md2.FastShutterIsOpen = True #OpenFastShutter()
-        self.fluodet.Start()
-        self.wait(self.fluodet)
-        self.md2.FastShutterIsOpen = False #CloseFastShutter()
+        
+        self.openFastShutter()
+        
+        self.fluodet.start()
+        self.fluodet.wait()
+        #self.fluodet.stop()
+        self.closeFastShutter()
+        
         
     def takePoint(self, en):
         logging.info('takePoint %s' % en)
         # readout
         if self.test:
             self.results['observations'][en] = {'point': self.testData[en]}
-            self.parent.newPoint(float(en), float(self.results['observations'][en]['point']))
+            if self.parent is not None:
+                self.parent.newPoint(float(en), float(self.results['observations'][en]['point']))
             return
+
         # measurement
-        self.results['observations'][en] = {'roiCounts': self.fluodet.roi00_01,
-                                            'inputCountRate00': self.fluodet.inputCountRate00,
-                                            'outputCountRate00': self.fluodet.outputCountRate00,
-                                            'eventsInRun': self.fluodet.eventsInRun00,
-                                            'spectrum': self.fluodet.channel00,
-                                            'diode1': self.diode1.intensity,
-                                            'diode3': self.diode3.intensity,
-                                            'diode5': self.diode5.intensity,
-                                            'cvd': self.cvd.intensity}
+        results = {'roiCounts': self.fluodet.get_roi_counts(),
+                   'inputCountRate00': self.fluodet.getICR(),
+                   'outputCountRate00': self.fluodet.getOCR(),
+                   'eventsInRun': self.fluodet.get_events(),
+                   'spectrum': self.fluodet.get_data() }
+
+        for diode in self.diodes:
+            dev = self.diodes[diode]
+            results[diode] = dev.intensity
+
+        self.results['observations'][en] = results
+
         uptoendroi = self.results['observations'][en]['spectrum'][50: self.channel_fin]
         uptostartroi = self.results['observations'][en]['spectrum'][50: self.channel_debut]
         self.results['observations'][en]['uptoendroi'] = sum(uptoendroi)
         self.results['observations'][en]['uptostartroi'] = sum(uptostartroi)
+
         #logging.info('self.results[\'observations\'][en] %s' % self.results['observations'][en])
-        self.results['observations'][en]['point'] = float(self.results['observations'][en]['roiCounts']) / self.results['observations'][en]['cvd']
+
+        self.results['observations'][en]['point'] = float(self.results['observations'][en]['roiCounts']) / self.results['observations'][en][ self.normdiode ]
+
         #self.results['observations'][en]['point'] = float(self.results['observations'][en]['roiCounts']) / self.results['observations'][en]['eventsInRun']
         #self.results['observations'][en]['point'] = float(self.results['observations'][en]['roiCounts']) / self.results['observations'][en]['uptostartroi']
+
         self.parent.newPoint(float(en), float(self.results['observations'][en]['point']))
             
     def updateRunningScan(self, en):
@@ -535,35 +590,41 @@ class xanes(object):
 
 
     def saveDat(self):
+
+        # PX2
+
         logging.info('saveDat')
         f = open('{prefix}_{element}_{edge}.dat'.format(**self.results), 'w')
         f.write('# EScan {date}\n'.format(**{'date': time.ctime(self.results['timestamp'])}))
-        f.write('# Energy Motor i11-ma-c03/op/mono1\n')
+        f.write('# Energy Motor %s\n' % self.mono_dev)
         f.write('# Normalized value\n')
         f.write('# roi counts\n')
-        f.write('# i11-ma-c04/dt/xbpm_diode.1\n')
+        f.write('# normalization diode: %s\n' % self.normdiode)
         f.write(
             '# Counts on the fluorescence detector: all channels\n')
         f.write(
             '# Counts on the fluorescence detector: channels up to end of ROI\n')
         for en in self.results['ens_strings']:
             normalized_intensity=self.results['observations'][en][
-                'roiCounts'] / self.results['observations'][en]['cvd']
+                'roiCounts'] / self.results['observations'][en][ self.normdiode ]
             f.write(
-                ' {en} {normalized_intensity} {roiCounts} {diode1} {eventsInRun}\n'.format(**{'en': en,
+                ' {en} {normalized_intensity} {roiCounts} {normdiode} {eventsInRun}\n'.format(**{'en': en,
                                                                                               'normalized_intensity': normalized_intensity,
                                                                                               'roiCounts': self.results['observations'][en]['roiCounts'],
-                                                                                              'diode1': self.results['observations'][en]['cvd'],
+                                                                                              'normdiode': self.results['observations'][en][self.normdiode],
                                                                                               'eventsInRun': self.results['observations'][en]['eventsInRun']}))
         f.write('# Duration: {duration}\n'.format(**self.results))
         f.close()
 
     def saveRaw(self):
+
+        # PX2
+
         logging.info('saveRaw')
         #logging.info('self.results %s' % self.results)
         logging.info('raw filename %s' % os.path.join(self.directory, '{prefix}_{element}_{edge}.raw'.format(**self.results)))
         f = open(os.path.join(self.directory, '{prefix}_{element}_{edge}.raw'.format(**self.results)), 'w')
-        f.write('Proxima 2A, Escan, {date}\n'.format(**{'date': time.ctime(self.results['timestamp'])}))
+        f.write('{beamline}, Escan, {date}\n'.format(**{'beamline': self.beamlinename, 'date': time.ctime(self.results['timestamp'])}))
         f.write('{nbPoints}\n'.format(**{'nbPoints': len(self.results['points'])}))
         self.raw = []
         for en in self.ens_strings:
@@ -643,7 +704,7 @@ class xanes(object):
             en = round(en, self.cutoff)
             if self.results.has_key(en):
                 ens.append(en)
-                normalized_intensity = self.results['observations'][en]['roiCounts'] / self.results['observations'][en]['diode1']
+                normalized_intensity = self.results['observations'][en]['roiCounts'] / self.results['observations'][en][ self.normdiode ]
                 points.append(normalized_intensity)
         return ens, points
     
@@ -677,7 +738,7 @@ class xanes(object):
         self.testData['ens_strings'] = ens_strings #self._pointsToStrings(ens)
         logging.info('self.testData %s' % self.testData)
         
-if __name__ == "__main__":
+def main():
     #scan = xanes('Se', 'K', prefix='SeMet', testFile='/927bis/ccd/gitRepos/Scans/pychooch/examples/SeMet.raw')
     #points = scan.getObservationPoints()
     #print 'len(points)', len(points)
@@ -718,16 +779,37 @@ if __name__ == "__main__":
     print 'options', options
     print 'args', args
     
-    x = xanes(options.element,
+    # create the xanes object
+    hwr_directory = os.environ["XML_FILES_PATH"]
+
+    hwr = HardwareRepository.HardwareRepository(os.path.abspath(hwr_directory))
+    hwr.connect()
+
+    xanes = hwr.getHardwareObject("/xanes")
+
+    xanes.setup(None, options.element,
               options.edge,
               integrationTime = 0.1,
               undulatorOffset = options.undulatorOffset,
-              bleSteps = options.undulator,
-              test=True)
+              bleSteps = options.undulator)
               
-    x.scan()
+    xanes.scan()
               
     #scan.suivi()
-    x.saveRaw()
-    x.saveResults()
-    x.chooch()
+    xanes.saveRaw()
+    xanes.saveResults()
+    xanes.chooch()
+
+if __name__ == "__main__":
+
+    import sys
+    import os
+
+    print "Running Xanes procedure standalone" 
+    hwrpath = os.environ.get('XML_FILES_PATH',None)
+
+    if hwrpath is None:
+        print "  -- you should first source the file mxcube.rc to set your environment variables"
+        sys.exit(0)
+    else:
+        main()

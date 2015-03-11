@@ -50,7 +50,6 @@ class PX1Xanes(Xanes):
         self.Ps_v.gap = newGapFP_V
 
     def safeOpenSafetyShutter(self):
-	return
         logging.info('Opening the safety shutter -- checking the hutch PSS state')
 
         if self.test:
@@ -85,7 +84,6 @@ class PX1Xanes(Xanes):
         #self.optimizeTransmission()
         
         if not self.test:
-            logging.info("PX1Xanes:Prepare seting integrationTime: %.2f" % float(self.integrationTime) )
             self.fluodet.set_preset( float(self.integrationTime) )
                 
         self.results = {}
@@ -97,6 +95,7 @@ class PX1Xanes(Xanes):
         self.results['dynamicRange'] = self.dynamicRange
         self.results['integrationTime'] = self.integrationTime
         self.results['nbSteps'] = self.nbSteps
+
         logging.debug("PX1Xanes - finishing prepare")
         logging.debug("PX1Xanes - self.results: %s" % self.results) 
 

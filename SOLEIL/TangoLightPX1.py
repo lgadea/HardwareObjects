@@ -71,9 +71,6 @@ class TangoLightPX1(Device):
     def getState(self):
         return self.currentState 
 
-    def getState(self):
-        return self.currentState 
-
     def wagoIn(self):
         #logging.getLogger("HWR").info('TangoLightPX1. GoToVisuSamplePhase.')
         if not self.px1env.readyForVisuSample:

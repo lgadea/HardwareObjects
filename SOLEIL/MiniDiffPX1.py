@@ -14,6 +14,82 @@ from PX1Environment import EnvironmentPhase
 
 PHI_ANGLE_INCREMENT = 120
 
+<<<<<<< HEAD
+=======
+def manual_centring(phi, phiz, sampx, sampy, pixelsPerMmY, pixelsPerMmZ,
+                    beam_xc, beam_yc, kappa, omega):
+  global USER_CLICKED_EVENT
+  X, Y, PHI = [], [], []
+  centredPosRel = {}
+  phiSavedPosition = 0
+  if all([x.isReady() for x in (phi, phiz, sampx, sampy)]):
+    phiSavedPosition = phi.getPosition()
+    #phiSavedDialPosition = phi.getDialPosition()
+    #phiSavedDialPosition = 327.3
+    logging.debug("manual_centring: testing motor ready, phiSavedPosition %.1f" % phiSavedPosition)
+  else:
+    raise RuntimeError, "motors not ready"
+  
+  kappa.move(0)
+  omega.move(0)
+
+  try:  
+    while True:
+      USER_CLICKED_EVENT = AsyncResult()
+      x, y = USER_CLICKED_EVENT.get()
+      X.append(x)
+      Y.append(y)
+      PHI.append(phi.getPosition())
+      if len(X) == 3:
+        break
+      phi.moveRelative(PHI_ANGLE_INCREMENT)
+
+    # 2014-01-19-bessy-mh: variable beam position coordinates are passed as parameters
+    #beam_xc = imgWidth / 2
+    #beam_yc = imgHeight / 2
+
+    (dx1,dy1,dx2,dy2,dx3,dy3)=(X[0] - beam_xc, Y[0] - beam_yc,
+                               X[1] - beam_xc, Y[1] - beam_yc,
+                               X[2] - beam_xc, Y[2] - beam_yc)
+    PhiCamera=90
+
+    logging.debug("MANUAL_CENTRING: X=%s, Y=%s (Calib=%s/%s) (BeamCen=%s/%s)" % (X, Y, pixelsPerMmY, pixelsPerMmZ, beam_xc, beam_yc))
+
+    a1=math.radians(PHI[0]+PhiCamera)
+    a2=math.radians(PHI[1]+PhiCamera)
+    a3=math.radians(PHI[2]+PhiCamera)
+    p01=(dy1*math.sin(a2)-dy2*math.sin(a1))/math.sin(a2-a1)        
+    q01=(dy1*math.cos(a2)-dy2*math.cos(a1))/math.sin(a1-a2)
+    p02=(dy1*math.sin(a3)-dy3*math.sin(a1))/math.sin(a3-a1)        
+    q02=(dy1*math.cos(a3)-dy3*math.cos(a1))/math.sin(a1-a3)
+    p03=(dy3*math.sin(a2)-dy2*math.sin(a3))/math.sin(a2-a3)        
+    q03=(dy3*math.cos(a2)-dy2*math.cos(a3))/math.sin(a3-a2)
+
+    x_echantillon=(p01+p02+p03)/3.0
+    y_echantillon=(q01+q02+q03)/3.0
+    z_echantillon=(-dx1-dx2-dx3)/3.0
+    #print "Microglide X = %d :    Y = %d :    Z = %d : " %(x_echantillon,y_echantillon,z_echantillon)
+        
+    x_echantillon_real=1000.*x_echantillon/pixelsPerMmY + sampx.getPosition()
+    y_echantillon_real=1000.*y_echantillon/pixelsPerMmY + sampy.getPosition()
+    z_echantillon_real=1000.*z_echantillon/pixelsPerMmY + phiz.getPosition()
+
+    if (z_echantillon_real + phiz.getPosition() < phiz.getLimits()[0]*2) :
+        logging.getLogger("HWR").error("loop too long")
+        centredPos = {}
+        phi.move(phiSavedPosition)            
+    else :    
+        centredPos= { sampx: x_echantillon_real,
+                      sampy: y_echantillon_real,
+                      phiz: z_echantillon_real}
+    return centredPos
+  except Exception, e:
+    logging.getLogger("HWR").error("MiniDiffPX1: Centring error: %s" % e)
+    phi.move(phiSavedPosition)    
+    raise
+
+
+>>>>>>> PL. Fixes to wait phase changes with gevent timeouts in MiniDiffPX1.
 @task
 def move_to_centred_position(centred_pos):
      logging.getLogger("HWR").info("move_to_centred_position")
@@ -589,10 +665,17 @@ def take_snapshots(number_of_snapshots, px1env, phi, drawing):
     
     logging.info("MiniDiffPX1: readyForManualTransfer = %s" % _ready)
     if not _ready:
+<<<<<<< HEAD
         with gevent.Timeout(25):
             px1env.setPhase(EnvironmentPhase.VISUSAMPLE)
             while not px1env.readState() == "ON":
                 time.sleep(0.05)
+=======
+        with gevent.Timeout(15):
+            while not px1env.readState() == "ON":
+                time.sleep(0.05)
+            px1env.setPhase(EnvironmentPhase.VISUSAMPLE)
+>>>>>>> PL. Fixes to wait phase changes with gevent timeouts in MiniDiffPX1.
     else:
         logging.info("Trying to set visusample phase. But already in that phase.")
 

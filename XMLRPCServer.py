@@ -15,11 +15,9 @@ import socket
 import time
 import json
 
+from HardwareRepository.BaseHardwareObjects import Equipment
 from HardwareRepository.BaseHardwareObjects import HardwareObject
-if sys.version_info > (3, 0):
-   from xmlrpc.server import SimpleXMLRPCServer
-else:
-   from SimpleXMLRPCServer import SimpleXMLRPCServer
+from SimpleXMLRPCServer import SimpleXMLRPCServer
 
 
 __author__ = "Marcus Oskarsson, Matias Guijarro"
@@ -60,6 +58,8 @@ class XMLRPCServer(HardwareObject):
         try:
             self.open()
         except:
+            import traceback
+            logging.getLogger("HWR").info(traceback.format_exc())
             logging.getLogger("HWR").debug("Can't start XML-RPC server")
         
 
@@ -423,4 +423,29 @@ class XMLRPCServer(HardwareObject):
                         recurse=False, prefix=prefix)
                 except StopIteration:
                     pass
+
+def main():
+    # create the xanes object
+    hwr_directory = os.environ["XML_FILES_PATH"]
+
+    hwr = HardwareRepository.HardwareRepository(os.path.abspath(hwr_directory))
+    hwr.connect()
+
+    server = hwr.getHardwareObject("/xml-rpc-server")
+    print server.start_queue()
+
+
+if __name__ == '__main__':
+    import sys
+    import os
+
+    print "Running XML Server standalone"
+    hwrpath = os.environ.get('XML_FILES_PATH',None)
+
+    if hwrpath is None:
+        print "  -- you should first source the file mxcube.rc to set your environment variables"
+        sys.exit(0)
+    else:
+        main()
+
 

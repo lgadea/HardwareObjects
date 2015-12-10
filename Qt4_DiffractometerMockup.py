@@ -30,13 +30,13 @@ import queue_model_objects_v1 as qmo
 from gevent.event import AsyncResult
 from HardwareRepository import HardwareRepository
 from HardwareRepository.TaskUtils import *
-from HardwareRepository.BaseHardwareObjects import Equipment
+from HardwareRepository.BaseHardwareObjects import HardwareObject
 
 
 last_centred_position = [200, 200]
 
 
-class Qt4_DiffractometerMockup(Equipment):
+class Qt4_DiffractometerMockup(HardwareObject):
     """
     Descript. :
     """
@@ -48,7 +48,7 @@ class Qt4_DiffractometerMockup(Equipment):
         """
         Descript. :
         """
-        Equipment.__init__(self, *args)
+        HardwareObject.__init__(self, *args)
 
         qmo.CentredPosition.set_diffractometer_motor_names(\
             "phi", "focus", "phiz", "phiy", "zoom",
@@ -61,7 +61,6 @@ class Qt4_DiffractometerMockup(Equipment):
         self.sampleXMotor = None
         self.sampleYMotor = None
         self.camera = None
-        self.beam_info_hwobj = None
 
         self.beam_position = None
         self.x_calib = None
@@ -114,6 +113,7 @@ class Qt4_DiffractometerMockup(Equipment):
                                        'sampy' : 0, 'zoom' : 0, 'phi' : 17.6,
                                        'focus' : 0, 'kappa': 0, 'kappa_phi': 0,
                                        'beam_x': 0, 'beam_y': 0} 
+        self.current_state_dict = {}
         self.centring_status = {"valid": False}
         self.centring_time = 0
         self.user_confirms_centring = True
@@ -125,16 +125,12 @@ class Qt4_DiffractometerMockup(Equipment):
         self.equipmentReady()
         self.user_clicked_event = AsyncResult()
 
-        self.beam_info_hwobj = self.getObjectByRole("beam_info")
-
-        #self.beam_info_hwobj = HardwareRepository.HardwareRepository().\
-        #                        getHardwareObject(self.getProperty("beam_info"))
-
-        self.camera_hwobj = self.getObjectByRole("camera")
-        if self.beam_info_hwobj is not None:
-            self.connect(self.beam_info_hwobj, 'beamPosChanged', self.beam_position_changed)
+        self.phi_motor_hwobj = self.getObjectByRole('phi')
+        if self.phi_motor_hwobj is not None:
+            self.connect(self.phi_motor_hwobj, 'stateChanged', self.phi_motor_state_changed)
+            self.connect(self.phi_motor_hwobj, "positionChanged", self.phi_motor_moved)
         else:
-            logging.getLogger("HWR").debug('Minidiff: Beaminfo is not defined')
+            logging.getLogger("HWR").error('Qt4_EMBLMiniDiff: Phi motor is not defined')
 
         self.reversing_rotation = self.getProperty("reversingRotation")
         try:
@@ -216,6 +212,22 @@ class Qt4_DiffractometerMockup(Equipment):
         Descript. :
         """
         self.emit('minidiffNotReady', ())
+
+    def phi_motor_moved(self, pos):
+        """
+        Descript. :
+        """
+        self.current_positions_dict["phi"] = pos
+        self.emit_diffractometer_moved()
+        self.emit("phiMotorMoved", pos)
+        #self.emit('stateChanged', (self.current_state_dict["phi"], ))
+
+    def phi_motor_state_changed(self, state):
+        """
+        Descript. :
+        """
+        self.current_state_dict["phi"] = state
+        self.emit('stateChanged', (state, ))
 
     def invalidate_centring(self):
         """
@@ -591,7 +603,7 @@ class Qt4_DiffractometerMockup(Equipment):
 
     def update_values(self):
         self.emit('zoomMotorPredefinedPositionChanged', None, None)
-        omega_ref = [100, 0]
+        omega_ref = [300, 0]
         self.emit('omegaReferenceChanged', omega_ref)
 
     def get_phase_list(self):

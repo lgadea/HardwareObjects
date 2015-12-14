@@ -179,6 +179,8 @@ class Qt4_GraphicsManager(HardwareObject):
             self.beam_info_dict = self.beam_info_hwobj.get_beam_info()
             self.connect(self.beam_info_hwobj, "beamPositionChanged", self.beam_position_changed)
             self.connect(self.beam_info_hwobj, "beamInfoChanged", self.beam_info_changed)
+
+            self.beam_info_changed(self.beam_info_dict)
             self.beam_position_changed(self.beam_info_hwobj.get_beam_position())
         else:
             logging.getLogger("HWR").error("GraphicsManager: BeamInfo hwobj not defined")

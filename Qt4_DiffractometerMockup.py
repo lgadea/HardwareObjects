@@ -129,8 +129,6 @@ class Qt4_DiffractometerMockup(HardwareObject):
         if self.phi_motor_hwobj is not None:
             self.connect(self.phi_motor_hwobj, 'stateChanged', self.phi_motor_state_changed)
             self.connect(self.phi_motor_hwobj, "positionChanged", self.phi_motor_moved)
-        else:
-            logging.getLogger("HWR").error('Qt4_EMBLMiniDiff: Phi motor is not defined')
 
         self.reversing_rotation = self.getProperty("reversingRotation")
         try:

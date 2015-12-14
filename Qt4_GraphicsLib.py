@@ -96,12 +96,20 @@ class GraphicsItem(QtGui.QGraphicsItem):
         self.rect.setHeight(height)
 
     def set_start_position(self, position_x, position_y):
+        """Sets start position
+        """
+       
         if (position_x is not None and
             position_y is not None):
             self.start_coord = [position_x, position_y]
         self.scene().update()
 
     def get_start_position(self):
+        """Returns start coordinate of the shape
+ 
+        :return: list with two int
+        """
+
         return self.start_coord
 
     def set_end_position(self, position_x, position_y):
@@ -391,7 +399,7 @@ class GraphicsItemGrid(GraphicsItem):
         self.__osc_start = None
         self.__motor_pos_corner = []
         self.__centred_position = None
-        self.__grid_snapshot = None
+        self.__snapshot = None
         self.__grid_size_pix = [0, 0]
         self.__grid_range_pix = {"fast": 0, "slow": 0}
         self.__reversing_rotation = True
@@ -562,8 +570,11 @@ class GraphicsItemGrid(GraphicsItem):
     def set_score(self, score):
         self.__score = score
 
-    def get_grid_snapshot(self):
-        return self.__grid_snapshot
+    def get_snapshot(self):
+        return self.__snapshot
+
+    def set_snapshot(self, snapshot):
+        self.__snapshot = snapshot
 
     def paint(self, painter, option, widget):
         pen = QtGui.QPen(self.solid_line_style)
@@ -754,6 +765,7 @@ class GraphicsItemGrid(GraphicsItem):
                  image in line from col and row
                  col and row can be floats
         """
+        """
         image = int(self.__num_images_per_line / 2.0 + \
                     (self.grid_direction['fast'][0] * \
                     (self.__num_images_per_line / 2.0 - col) + \
@@ -765,6 +777,10 @@ class GraphicsItemGrid(GraphicsItem):
                 (self.__num_lines / 2.0 - col) + \
                  self.grid_direction['slow'][1] * \
                 (self.__num_lines / 2.0 - row)))
+        """
+        image = row
+        line = col 
+    
 
         if self.__reversing_rotation and line % 2 :
             image_serial = self.__first_image_num + \
@@ -786,8 +802,9 @@ class GraphicsItemGrid(GraphicsItem):
                      i.e. rotates/inverts the scan coordinates into 
                      grid coordinates.
         """
+        """
         ref_fast, ref_slow = self.get_coord_ref_from_line_image(line, image)
-
+    
         col = self.__num_cols / 2.0 + (self.__num_images_per_line - 1) * \
               self.grid_direction['fast'][0] * ref_fast + \
               (self.__num_lines - 1) * \
@@ -796,6 +813,10 @@ class GraphicsItemGrid(GraphicsItem):
               self.grid_direction['fast'][1] * ref_fast + \
               (self.__num_lines - 1) * \
               self.grid_direction['slow'][1] * ref_slow
+        """
+        col = line
+        row = image
+
         return int(col), int(row)
 
     def get_motor_pos_from_col_row(self, col, row, as_cpos=False):
@@ -1179,13 +1200,10 @@ class GraphicsView(QtGui.QGraphicsView):
         self.update()
  
     def keyPressEvent(self, event):
-        key_type = None
         if event.key() in (QtCore.Qt.Key_Delete, QtCore.Qt.Key_Backspace):  
-            key_type = "Delete"
+            self.keyPressedSignal.emit("Delete")
         elif event.key() == QtCore.Qt.Key_Escape:
-            key_type = "Escape"
-        if key_type:
-            self.keyPressedSignal.emit(key_type)
+            self.keyPressedSignal.emit("Escape")
 
 
 class GraphicsScene(QtGui.QGraphicsScene):

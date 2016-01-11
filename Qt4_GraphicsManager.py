@@ -30,10 +30,21 @@ example xml:
 </object>
 """
 
+import os
+import tempfile
 import logging
+import numpy as np
+from scipy import ndimage
 
-from PyQt4 import QtGui
-from PyQt4 import QtCore
+from PyQt4 import QtGui, QtCore
+
+try:
+  import lucid2 as lucid
+except ImportError:
+  try:
+      import lucid
+  except ImportError:
+      logging.warning("Could not find autocentring library, automatic centring is disabled")
 
 import Qt4_GraphicsLib as GraphicsLib
 import queue_model_objects_v1 as queue_model_objects
@@ -177,8 +188,12 @@ class Qt4_GraphicsManager(HardwareObject):
         self.beam_info_hwobj = self.getObjectByRole("beam_info")
         if self.beam_info_hwobj:
             self.beam_info_dict = self.beam_info_hwobj.get_beam_info()
-            self.connect(self.beam_info_hwobj, "beamPositionChanged", self.beam_position_changed)
-            self.connect(self.beam_info_hwobj, "beamInfoChanged", self.beam_info_changed)
+            self.connect(self.beam_info_hwobj, 
+                         "beamPositionChanged", 
+                         self.beam_position_changed)
+            self.connect(self.beam_info_hwobj, 
+                         "beamInfoChanged",
+                         self.beam_info_changed)
 
             self.beam_info_changed(self.beam_info_dict)
             self.beam_position_changed(self.beam_info_hwobj.get_beam_position())
@@ -190,7 +205,9 @@ class Qt4_GraphicsManager(HardwareObject):
             self.graphics_scene_size = self.camera_hwobj.get_image_dimensions()
             self.set_graphics_scene_size(self.graphics_scene_size, False)
             self.camera_hwobj.start_camera()
-            self.connect(self.camera_hwobj, "imageReceived", self.camera_image_received) 
+            self.connect(self.camera_hwobj, 
+                         "imageReceived", 
+                         self.camera_image_received) 
         else:         
             logging.getLogger("HWR").error("GraphicsManager: Camera hwobj not defined")
 
@@ -558,7 +575,7 @@ class Qt4_GraphicsManager(HardwareObject):
         """
         return self.graphics_view
 
-    def get_camera_frame(self):
+    def get_graphics_camera_frame(self):
         """Rturns current CameraFrame
      
         :returns: GraphicsCameraFrame
@@ -689,6 +706,11 @@ class Qt4_GraphicsManager(HardwareObject):
 
         self.graphics_view.graphics_scene.clearSelection()
 
+    def select_line(self, line):
+        """Selects shape"""
+        line.setSelected(True)
+        self.graphics_view.graphics_scene.update()
+
     def select_all_points(self):
         """Selects all points
         """
@@ -751,7 +773,7 @@ class Qt4_GraphicsManager(HardwareObject):
         self.centring_points.append(new_point)
         self.graphics_view.graphics_scene.addItem(new_point)        
 
-    def get_snapshot(self, shape=None):
+    def get_snapshot(self, shape=None, bw=None, return_as_array=None):
         """Takes a snapshot of the scene
 
         :param shape: shape that needs to be selected
@@ -769,7 +791,11 @@ class Qt4_GraphicsManager(HardwareObject):
         image_painter = QtGui.QPainter(image)
         self.graphics_view.render(image_painter)
         image_painter.end()
-        return image
+        if return_as_array:
+            pass         
+        else:
+           
+            return image
 
     def save_snapshot(self, file_name):
         """Method to save snapshot
@@ -1005,13 +1031,28 @@ class Qt4_GraphicsManager(HardwareObject):
         :type spacing: list with two floats (can be negative)        
         """ 
 
-        self.graphics_grid_draw_item = GraphicsLib.GraphicsItemGrid(self, self.beam_info_dict, 
-             spacing, self.pixels_per_mm)
+        self.graphics_grid_draw_item = GraphicsLib.GraphicsItemGrid(self, 
+             self.beam_info_dict, spacing, self.pixels_per_mm)
         self.graphics_grid_draw_item.set_draw_mode(True) 
         self.graphics_grid_draw_item.index = self.grid_count
         self.grid_count += 1
         self.graphics_view.graphics_scene.addItem(self.graphics_grid_draw_item)
         self.wait_grid_drawing_click = True 
+
+    def create_automatic_grid(self):
+        """Creates automatic grid
+        """ 
+        
+        auto_grid = GraphicsLib.GraphicsItemGrid(self, self.beam_info_dict,
+             (0, 0), self.pixels_per_mm)
+        auto_grid.index = self.grid_count
+        auto_grid.set_draw_mode(True)
+        self.grid_count += 1
+        self.graphics_view.graphics_scene.addItem(auto_grid)
+        shape_corner_coord = self.detect_shape_coord()
+        #auto_grid.set_automatic_size(self.beam_position)
+        auto_grid.set_automatic_size(shape_corner_coord)
+        return auto_grid
 
     def refresh_camera(self):
         """To be deleted
@@ -1081,4 +1122,40 @@ class Qt4_GraphicsManager(HardwareObject):
         """Starts auto centring
         """
 
+        return
+
+    def set_display_beam_shapes(self, display_state):
+        """Enables or disables beam shape drawing for graphics scene
+           items (lines and grids)
+
+        """
+        for item in self.graphics_view.graphics_scene.items():
+            if isinstance(item, GraphicsLib.GraphicsItem):
+                item.set_display_beam_shape(display_state)
+                self.graphics_view.graphics_scene.update()
+
+    def detect_shape_coord(self):
+        snapshot = self.camera_hwobj.get_frame(bw=True, return_as_array=False)
+        snapshot_filename = os.path.join(tempfile.gettempdir(), "mxcube_sample_snapshot.png")
+        snapshot.save(snapshot_filename)
+        info, x, y = lucid.find_loop(snapshot_filename)
+        print info, x, y
+        surface_info = self.get_surface_info(self.camera_hwobj.get_frame(\
+              bw=True, return_as_array=True))
+        print surface_info
+        return ((50, 50), (400, 400))
+
+    def get_surface_info(self, image_array):
+        """
+        hor_sum = image_array.sum(axis=0)
+        ver_sum = image_array.sum(axis=1)
+       
+        half_max = hor_sum.max() / 2.0
+        s = splrep(np.linspace(0, hor_sum.size, hor_sum.size), hor_sum - half_max)
+        hor_roots = sproot(s)
+
+        half_max = ver_sum.max() / 2.0
+        s = splrep(np.linspace(0, ver_sum.size, ver_sum.size), ver_sum - half_max)
+        ver_roots = sproot(s)
+        """
         return

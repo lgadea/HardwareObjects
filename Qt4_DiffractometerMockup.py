@@ -25,6 +25,8 @@ import tempfile
 import gevent
 import random
 
+import lucid2
+
 import queue_model_objects_v1 as qmo
 
 from gevent.event import AsyncResult
@@ -158,6 +160,7 @@ class Qt4_DiffractometerMockup(HardwareObject):
         """
         Descript. :
         """
+        print self.grid_direction
         return self.grid_direction
 
     def manual_centring(self):

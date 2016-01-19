@@ -9,9 +9,12 @@ import tempfile
 import gevent
 
 try:
-   import lucid
-except:
-   logging.getLogger("HWR").error('EMBLMiniDiff: automatic centring not available')
+  import lucid2 as lucid
+except ImportError:
+  try:
+      import lucid
+  except ImportError:
+      logging.warning("Could not find autocentring library, automatic centring is disabled")
 
 from gevent.event import AsyncResult
 
@@ -41,6 +44,7 @@ class EMBLMiniDiff(HardwareObject):
     PLATE = "Plate"
     PERMANENT = "Permanent"
 
+    AUTOMATIC_CENTRING_IMAGES = 8
 
     def __init__(self, *args):
         """
@@ -66,7 +70,6 @@ class EMBLMiniDiff(HardwareObject):
         self.kappa_motor_hwobj = None
         self.kappa_phi_motor_hwobj = None
         self.omega_reference_motor = None
-        self.beam_info_hwobj = None
         self.centring_hwobj = None
         self.minikappa_correction_hwobj = None
 
@@ -80,6 +83,7 @@ class EMBLMiniDiff(HardwareObject):
         self.cmd_start_auto_focus = None   
 
         # Internal values -----------------------------------------------------
+        self.status = "Ready"
         self.beam_position = None
         self.zoom_centre = None
         self.pixels_per_mm_x = None
@@ -118,6 +122,7 @@ class EMBLMiniDiff(HardwareObject):
         self.ready_event = gevent.event.Event()
         self.centring_methods = {
              EMBLMiniDiff.MANUAL3CLICK_MODE: self.start_3Click_centring,
+             EMBLMiniDiff.MOVE_TO_BEAM_MODE: self.start_2D_centring,
              EMBLMiniDiff.C3D_MODE: self.start_automatic_centring}
         self.cancel_centring_methods = {}
         self.current_positions_dict = {'phiy'  : 0, 'phiz' : 0, 'sampx' : 0,
@@ -131,6 +136,10 @@ class EMBLMiniDiff(HardwareObject):
         self.user_confirms_centring = True 
         self.user_clicked_event = AsyncResult()
         self.head_type = EMBLMiniDiff.MINIKAPPA
+
+        self.chan_status = self.getChannelObject('Status')
+        if self.chan_status:
+            self.chan_status.connectSignal("update", self.status_changed)
 
         self.chan_calib_x = self.getChannelObject('CoaxCamScaleX')
         self.chan_calib_y = self.getChannelObject('CoaxCamScaleY')
@@ -188,12 +197,6 @@ class EMBLMiniDiff(HardwareObject):
         else:
             logging.getLogger("HWR").debug('EMBLMinidiff: Kappa and Phi motors not initialized (Plate mode detected).')
     
-        self.beam_info_hwobj = self.getObjectByRole("beam_info")
-        if self.beam_info_hwobj is not None:  
-            self.connect(self.beam_info_hwobj, 'beamPosChanged', self.beam_position_changed)
-        else:
-            logging.getLogger("HWR").debug('EMBLMinidiff: Beaminfo is not defined')
-
         if self.phi_motor_hwobj is not None:
             self.connect(self.phi_motor_hwobj, 'stateChanged', self.phi_motor_state_changed)
             self.connect(self.phi_motor_hwobj, "positionChanged", self.phi_motor_moved)
@@ -233,6 +236,12 @@ class EMBLMiniDiff(HardwareObject):
 
         if self.focus_motor_hwobj is not None:
             self.connect(self.focus_motor_hwobj, 'positionChanged', self.focus_motor_moved)
+
+        self.beam_info_hwobj = self.getObjectByRole("beam_info")
+        if self.beam_info_hwobj is not None:
+            self.connect(self.beam_info_hwobj, 'beamPosChanged', self.beam_position_changed)
+        else:
+            logging.getLogger("HWR").debug('EMBLMinidiff: Beaminfo is not defined')
 
         if self.camera_hwobj is None:
             logging.getLogger("HWR").error('EMBLMiniDiff: Camera is not defined')
@@ -336,6 +345,10 @@ class EMBLMiniDiff(HardwareObject):
             self.phi_motor_hwobj is not None and \
             self.phiz_motor_hwobj is not None and \
             self.phiy_motor_hwobj is not None
+
+    def status_changed(self, status):
+        self.status = status
+        self.emit("minidiffStatusChanged", (self.status))
 
     def current_phase_changed(self, phase):
         """
@@ -538,7 +551,11 @@ class EMBLMiniDiff(HardwareObject):
 
     def fast_shutter_state_changed(self, is_open):
         self.fast_shutter_is_open = is_open
-	self.emit('minidiffShutterStateChanged', (self.fast_shutter_is_open, ))
+        if is_open:
+            msg = "Opened"
+        else:
+            msg = "Closed"
+	self.emit('minidiffShutterStateChanged', (self.fast_shutter_is_open, msg))
 
     def refresh_omega_reference_position(self):
         """
@@ -617,7 +634,15 @@ class EMBLMiniDiff(HardwareObject):
         """
         if self.cmd_start_set_phase is not None:
             self.cmd_start_set_phase(name)
-        self.refresh_video()
+
+    def set_phase(self, phase):
+        self.ready_event.clear()
+        set_phase_task = gevent.spawn(self._executeServerTask,
+                                      self.cmd_start_set_phase,
+                                      45,
+                                      phase)
+        self.ready_event.wait()
+        self.ready_event.clear()
 
     def refresh_video(self):
         """
@@ -626,8 +651,6 @@ class EMBLMiniDiff(HardwareObject):
         if self.camera_hwobj is not None:
             if self.current_phase != "Unknown":  
                 self.camera_hwobj.refresh_video()
-        if self.beam_info_hwobj is not None: 
-            self.beam_position = self.beam_info_hwobj.get_beam_position()         
 
     def start_auto_focus(self):
         """
@@ -755,7 +778,7 @@ class EMBLMiniDiff(HardwareObject):
         """
         self.emit_progress_message("3 click centring...")
         self.current_centring_procedure = gevent.spawn(self.manual_centring)
-        self.current_centring_procedure.link(self.manual_centring_done)
+        self.current_centring_procedure.link(self.centring_done)
 
     def start_automatic_centring(self, sample_info = None, loop_only = False):
         """
@@ -763,7 +786,7 @@ class EMBLMiniDiff(HardwareObject):
         """
         self.emit_progress_message("Automatic centring...")
         self.current_centring_procedure = gevent.spawn(self.automatic_centring)
-        self.current_centring_procedure.link(self.automatic_centring_done)
+        self.current_centring_procedure.link(self.centring_done)
 
     def start_2D_centring(self, coord_x=None, coord_y=None, omega=None):
         """
@@ -801,7 +824,7 @@ class EMBLMiniDiff(HardwareObject):
         """
         self.centring_hwobj.initCentringProcedure()
         self.head_type = self.chan_head_type.getValue()
-        for click in (0, 1, 2):
+        for click in range(3):
             self.user_clicked_event = AsyncResult()
             x, y = self.user_clicked_event.get()
             self.centring_hwobj.appendCentringDataPoint(
@@ -820,11 +843,26 @@ class EMBLMiniDiff(HardwareObject):
         return self.centring_hwobj.centeredPosition(return_by_name=False)
 
     def automatic_centring(self):
+        """Automatic centring procedure. Rotates n times and executes
+           centring algorithm. Optimal scan position is detected.
         """
-        Descript. :
-        """
-        x, y = self.find_loop()
-        return x, y
+        
+        surface_score_list = []
+        self.zoom_motor_hwobj.moveToPosition("Zoom 1")
+        gevent.sleep(1)
+        self.centring_hwobj.initCentringProcedure()
+        for image in range(EMBLMiniDiff.AUTOMATIC_CENTRING_IMAGES):
+            x, y, score = self.find_loop()
+            if x > -1 and y > -1:
+                 self.centring_hwobj.appendCentringDataPoint(
+                     {"X": (x - self.beam_position[0])/ self.pixels_per_mm_x,
+                      "Y": (y - self.beam_position[1])/ self.pixels_per_mm_y})
+            surface_score_list.append(score)
+            self.phi_motor_hwobj.moveRelative(\
+                 360.0 / EMBLMiniDiff.AUTOMATIC_CENTRING_IMAGES)
+            gevent.sleep(0.3)
+        self.omega_reference_add_constraint()
+        return self.centring_hwobj.centeredPosition(return_by_name=False)
 
     def motor_positions_to_screen(self, centred_positions_dict):
         """
@@ -847,16 +885,16 @@ class EMBLMiniDiff(HardwareObject):
              self.zoom_centre['y']
         return x, y
  
-    def manual_centring_done(self, manual_centring_procedure):
+    def centring_done(self, centring_procedure):
         """
         Descript. :
         """
         try:
-            motor_pos = manual_centring_procedure.get()
+            motor_pos = centring_procedure.get()
             if isinstance(motor_pos, gevent.GreenletExit):
                 raise motor_pos
         except:
-            logging.exception("Could not complete manual centring")
+            logging.exception("Could not complete centring")
             self.emit_centring_failed()
         else:
             self.emit_progress_message("Moving sample to centred position...")
@@ -867,39 +905,7 @@ class EMBLMiniDiff(HardwareObject):
                 logging.exception("Could not move to centred position")
                 self.emit_centring_failed()
             else:
-                if not self.in_plate_mode():
-                    self.phi_motor_hwobj.syncMoveRelative(-180)
-            #logging.info("EMITTING CENTRING SUCCESSFUL")
-            self.centring_time = time.time()
-            self.emit_centring_successful()
-            self.emit_progress_message("")
-
-    def automatic_centring_done(self, auto_centring_procedure):
-        """
-        Descript. :
-        """
-        print "automatic_centring_done..."
-        res = auto_centring_procedure.get()
-        self.emit("newAutomaticCentringPoint", (res[0], res[1]))
-
-        return
-
-        try:
-            motor_pos = manual_centring_procedure.get()
-            if isinstance(motor_pos, gevent.GreenletExit):
-                raise motor_pos
-        except:
-            logging.exception("Could not complete automatic centring")
-            self.emit_centring_failed()
-        else:
-            self.emit_progress_message("Moving sample to centred position...")
-            self.emit_centring_moving()
-            try:
-                self.move_to_motors_positions(motor_pos)
-            except:
-                logging.exception("Could not move to centred position")
-                self.emit_centring_failed()
-            else:
+                #if 3 click centring move -180 
                 if not self.in_plate_mode():
                     self.phi_motor_hwobj.syncMoveRelative(-180)
             #logging.info("EMITTING CENTRING SUCCESSFUL")
@@ -1200,6 +1206,36 @@ class EMBLMiniDiff(HardwareObject):
 
     def find_loop(self):
         snapshot_filename = os.path.join(tempfile.gettempdir(), "mxcube_sample_snapshot.png")
-        self.camera_hwobj.take_snapshot(snapshot_filename, bw= True)
+        self.camera_hwobj.save_snapshot(snapshot_filename)
+        gevent.sleep(0.01)
         info, x, y = lucid.find_loop(snapshot_filename)
-        return x, y
+        #@surface_score = self.get_surface_score(self.camera_hwobj.\
+        #      get_new_image(return_as_array=True))
+        surface_score = 10
+        return x, y, surface_score
+
+    def get_surface_score(self, image):
+        return 10
+
+    def move_omega_relative(self, relative_angle):
+        self.phi_motor_hwobj.syncMoveRelative(relative_angle)
+
+    def _executeServerTask(self, method,timeout=30,*args):
+        self.status = "NotReady"
+        task_id = method(*args)
+        self._waitDeviceReady(timeout)
+        self.ready_event.set()
+
+    def _isDeviceReady(self):
+        """
+        Descript : Checks whether Sample changer HO is ready.
+        """
+        return self.status in ("Ready")
+
+    def _waitDeviceReady(self,timeout=None):
+        """
+        Descript. : Waits until the samle changer HO is ready.
+        """
+        with gevent.Timeout(timeout, Exception("Timeout waiting for device ready")):
+            while not self._isDeviceReady():
+                gevent.sleep(0.01)

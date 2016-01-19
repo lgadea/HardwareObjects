@@ -83,10 +83,12 @@ class Qt4_GraphicsManager(HardwareObject):
         self.in_measure_area_state = None
         self.in_move_beam_mark_state = None
         self.in_select_items_state = None
+        self.in_beam_define_state = None
         self.wait_grid_drawing_click = None
         self.wait_measure_distance_click = None
         self.wait_measure_angle_click = None
         self.wait_measure_area_click = None
+        self.wait_beam_define_click = None
         self.current_centring_method = None
         self.point_count = 0
         self.line_count = 0
@@ -105,6 +107,7 @@ class Qt4_GraphicsManager(HardwareObject):
         self.graphics_measure_area_item = None
         self.graphics_move_beam_mark_item = None
         self.graphics_select_tool_item = None
+        self.graphics_beam_define_item = None
  
     def init(self):
         """Main init function. Initiates all graphics items, hwobjs and 
@@ -134,6 +137,8 @@ class Qt4_GraphicsManager(HardwareObject):
         self.graphics_measure_area_item.hide()
         self.graphics_select_tool_item = GraphicsLib.GraphicsSelectTool(self)
         self.graphics_select_tool_item.hide()
+        self.graphics_beam_define_item = GraphicsLib.GraphicsItemBeamDefine(self)
+        self.graphics_beam_define_item.hide()
          
         self.graphics_view.graphics_scene.addItem(self.graphics_camera_frame) 
         self.graphics_view.graphics_scene.addItem(self.graphics_omega_reference_item)
@@ -145,6 +150,7 @@ class Qt4_GraphicsManager(HardwareObject):
         self.graphics_view.graphics_scene.addItem(self.graphics_measure_angle_item)
         self.graphics_view.graphics_scene.addItem(self.graphics_measure_area_item)
         self.graphics_view.graphics_scene.addItem(self.graphics_select_tool_item)
+        self.graphics_view.graphics_scene.addItem(self.graphics_beam_define_item)
 
         self.graphics_view.scene().mouseClickedSignal.connect(\
              self.mouse_clicked)
@@ -314,7 +320,8 @@ class Qt4_GraphicsManager(HardwareObject):
             cpos = queue_model_objects.CentredPosition(p_dict)
             screen_pos = self.diffractometer_hwobj.\
                     motor_positions_to_screen(cpos.as_dict())
-            point = GraphicsLib.GraphicsItemPoint(cpos, True, screen_pos[0], screen_pos[1])
+            point = GraphicsLib.GraphicsItemPoint(cpos, True, 
+                    screen_pos[0], screen_pos[1])
             if point:
                 self.add_shape(point)
                 cpos.set_index(point.index)
@@ -331,8 +338,8 @@ class Qt4_GraphicsManager(HardwareObject):
                 - infoMsg
         """
         self.set_centring_state(False)
+        self.emit("infoMsg", "Click Save to store new centring point!")
         self.emit("centringSuccessful", method, centring_status)
-        self.emit("infoMsg", "")
 
     def diffractometer_centring_failed(self, method, centring_status):
         """CleanUp method after centring failed
@@ -412,6 +419,10 @@ class Qt4_GraphicsManager(HardwareObject):
             self.start_graphics_item(self.graphics_measure_area_item)
             self.in_measure_area_state = True
             self.wait_measure_area_click = False
+        elif self.wait_beam_define_click:
+            self.start_graphics_item(self.graphics_beam_define_item)
+            self.in_beam_define_state = True
+            self.wait_beam_define_click = False
         elif self.in_measure_distance_state:
             self.graphics_measure_distance_item.store_coord(pos_x, pos_y)
         elif self.in_measure_angle_state:
@@ -420,6 +431,9 @@ class Qt4_GraphicsManager(HardwareObject):
             self.graphics_measure_area_item.store_coord()
         elif self.in_move_beam_mark_state:
             self.stop_move_beam_mark()
+        elif self.in_beam_define_state:
+            self.stop_beam_define()
+            #self.graphics_beam_define_item.store_coord(pos_x, pos_y)
         else:
             if left_click: 
                 self.graphics_select_tool_item.set_start_position(pos_x, pos_y)
@@ -450,6 +464,8 @@ class Qt4_GraphicsManager(HardwareObject):
             self.stop_measure_angle()
         elif self.in_measure_area_state:
             self.stop_measure_area()
+        elif self.in_beam_define_state:
+            self.stop_beam_define()
         else: 
             self.diffractometer_hwobj.move_to_coord(pos_x, pos_y)
 
@@ -473,6 +489,9 @@ class Qt4_GraphicsManager(HardwareObject):
             self.graphics_grid_draw_item.setSelected(True) 
             self.shape_dict[self.graphics_grid_draw_item.get_display_name()] = \
                  self.graphics_grid_draw_item
+        elif self.in_beam_define_state:
+            print "set positon and slit size"
+            self.stop_beam_define()
         elif self.in_select_items_state:
             self.graphics_select_tool_item.hide()
             self.in_select_items_state = False
@@ -503,6 +522,9 @@ class Qt4_GraphicsManager(HardwareObject):
             self.graphics_measure_area_item.set_coord(self.mouse_position)
         elif self.in_move_beam_mark_state:
             self.graphics_move_beam_mark_item.set_end_position(\
+                self.mouse_position[0], self.mouse_position[1])
+        elif self.in_beam_define_state:
+            self.graphics_beam_define_item.set_end_position(\
                 self.mouse_position[0], self.mouse_position[1])
         elif self.in_select_items_state:
              
@@ -535,6 +557,7 @@ class Qt4_GraphicsManager(HardwareObject):
             self.stop_measure_distance()
             self.stop_measure_angle()
             self.stop_measure_area()  
+            self.stop_beam_define()
  
     def item_clicked(self, item, state):
         """Item clicked event
@@ -644,11 +667,12 @@ class Qt4_GraphicsManager(HardwareObject):
             shape.index = self.point_count
             self.emit("shapeCreated", shape, "Point")
             self.emit("pointSelected", shape)
-            self.emit("infoMsg", shape.get_full_name() + " created")
+            self.emit("infoMsg", "Centring %s created" % shape.get_full_name())
         elif isinstance(shape, GraphicsLib.GraphicsItemLine):
             self.line_count += 1
             shape.index = self.line_count
             self.emit("shapeCreated", shape, "Line")
+            self.emit("infoMsg", "%s created" % shape.get_full_name())
         self.shape_dict[shape.get_display_name()] = shape
         self.graphics_view.graphics_scene.addItem(shape)
         shape.setSelected(True)
@@ -816,6 +840,7 @@ class Qt4_GraphicsManager(HardwareObject):
         :emits: infoMsg
         """ 
 
+        self.camera_hwobj.save_snapshot("/tmp/test_01.png")
         QtGui.QApplication.setOverrideCursor(QtGui.QCursor(QtCore.Qt.BusyCursor))
         if wait_click:
             logging.getLogger("user_level_log").info("Click to start " + \
@@ -879,6 +904,20 @@ class Qt4_GraphicsManager(HardwareObject):
              start_pos = self.graphics_beam_item.start_coord)
         self.graphics_move_beam_mark_item.set_beam_mark(\
              self.beam_info_dict, self.pixels_per_mm) 
+
+    def start_define_beam(self):
+        """Method to define beam size. 
+           User 
+
+        :emits: infoMsg
+        """
+
+        QtGui.QApplication.setOverrideCursor(\
+              QtGui.QCursor(QtCore.Qt.BusyCursor))
+        logging.getLogger("user_level_log").info("Select an area to " + \
+                 "define beam size")
+        self.wait_beam_define_click = True
+        self.emit("infoMsg", "Define beam size")
 
     def start_graphics_item(self, item, start_pos=None, end_pos=None):
         """Updates item on the scene
@@ -954,6 +993,25 @@ class Qt4_GraphicsManager(HardwareObject):
              self.graphics_move_beam_mark_item.end_coord[1])
         self.emit("infoMsg", "")
 
+    def stop_beam_define(self):
+        """Stops beam define
+
+        :emits: infoMsg
+        """
+
+        QtGui.QApplication.restoreOverrideCursor()
+        self.in_beam_define_state = False
+        self.wait_beam_define_click = False
+        self.graphics_beam_define_item.hide()
+        self.graphics_view.graphics_scene.update()
+        self.emit("infoMsg", "")
+        #self.beam_info_hwobj.set_slits_size(\
+        #     self.graphics_beam_define_item.width_microns,
+        #     self.graphics_beam_define_item.height_microns)
+        self.diffractometer_hwobj.move_to_coord(\
+             self.graphics_beam_define_item.center_coord[0],
+             self.graphics_beam_define_item.center_coord[1])
+
     def start_centring(self, tree_click=None):
         """Starts centring procedure
  
@@ -1003,8 +1061,8 @@ class Qt4_GraphicsManager(HardwareObject):
         selected_points = self.get_selected_points()
         if len(selected_points) == 2:
             self.diffractometer_hwobj.visual_align(\
-                 selected_points[0],
-                 selected_points[1])
+                 selected_points[0].get_centred_position(),
+                 selected_points[1].get_centred_position())
             self.emit("infoMsg", "Visual align")
         else:
             msg = "Select two centred position (CTRL click) to continue"
@@ -1097,11 +1155,19 @@ class Qt4_GraphicsManager(HardwareObject):
         :type use_scale: bool
         :emits: imageScaleChanged
         """
-
+        scene_size = self.graphics_scene_size
+        if image_scale == 1:
+            use_scale = False
         if use_scale:
             self.image_scale = image_scale
+            scene_size = [scene_size[0] * image_scale,
+                          scene_size[1] * image_scale]
         else: 
             self.image_scale = None
+
+        self.graphics_view.scene().setSceneRect(0, 0, \
+             scene_size[0] - 10, scene_size[1] - 10)
+        self.graphics_view.toggle_scrollbars_enable(self.image_scale > 1)
         self.emit('imageScaleChanged', self.image_scale)
 
     def get_image_scale(self):
@@ -1121,8 +1187,10 @@ class Qt4_GraphicsManager(HardwareObject):
     def start_auto_centring(self):
         """Starts auto centring
         """
-
-        return
+        self.emit("centringInProgress", True)
+        self.diffractometer_hwobj.start_centring_method(\
+             self.diffractometer_hwobj.C3D_MODE)
+        self.emit("infoMsg", "Automatic centring")
 
     def set_display_beam_shapes(self, display_state):
         """Enables or disables beam shape drawing for graphics scene
@@ -1139,10 +1207,8 @@ class Qt4_GraphicsManager(HardwareObject):
         snapshot_filename = os.path.join(tempfile.gettempdir(), "mxcube_sample_snapshot.png")
         snapshot.save(snapshot_filename)
         info, x, y = lucid.find_loop(snapshot_filename)
-        print info, x, y
         surface_info = self.get_surface_info(self.camera_hwobj.get_frame(\
               bw=True, return_as_array=True))
-        print surface_info
         return ((50, 50), (400, 400))
 
     def get_surface_info(self, image_array):
@@ -1159,3 +1225,18 @@ class Qt4_GraphicsManager(HardwareObject):
         ver_roots = sproot(s)
         """
         return
+
+    def display_grid(self, state):
+        self.graphics_scale_item.set_display_grid(state) 
+
+    def take_scene_snapshots(self, filename):
+        logging.getLogger("HWR").debug("Saving scene snapshot: %s" % filename)
+        snapshot = self.get_snapshot()
+        snapshot.save(filename)
+
+    def display_radiation_damage(self, state):
+        test = "Radiation dose per sample: "
+        if state:
+            self.graphics_scale_item.set_radiation_dose_info(test)
+        else:
+            self.graphics_scale_item.set_radiation_dose_info(None)

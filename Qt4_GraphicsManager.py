@@ -278,6 +278,14 @@ class Qt4_GraphicsManager(HardwareObject):
                         corner_coord.append((self.diffractometer_hwobj.\
                             motor_positions_to_screen(motor_pos)))
                     shape.set_corner_coord(corner_coord) 
+
+                    # If diffractometer is not in centred position then
+                    # it is in projection mode                    
+                    # This could look much nicer
+                    cpos = queue_model_objects.CentredPosition(\
+                        self.diffractometer_hwobj.get_positions()) 
+                    shape.set_projection_mode(cpos != shape.get_centred_position())
+
             for shape in self.get_shapes():
                 shape.show()
             self.graphics_view.graphics_scene.update()
@@ -480,8 +488,8 @@ class Qt4_GraphicsManager(HardwareObject):
         :emits: shapeCreated
         """
         if self.in_grid_drawing_state:
+            self.update_grid_motor_positions(self.graphics_grid_draw_item)
             self.graphics_grid_draw_item.set_draw_mode(False)
-            self.graphics_grid_draw_item.fix_grid_position()
             self.wait_grid_drawing_click = False
             self.in_grid_drawing_state = False
             self.de_select_all()
@@ -1111,6 +1119,21 @@ class Qt4_GraphicsManager(HardwareObject):
         #auto_grid.set_automatic_size(self.beam_position)
         auto_grid.set_automatic_size(shape_corner_coord)
         return auto_grid
+
+    def update_grid_motor_positions(self, grid_object):
+        grid_center_x, grid_center_y = grid_object.get_center_coord()
+        motor_pos = self.diffractometer_hwobj.get_centred_point_from_coord(\
+            grid_center_x, grid_center_y, return_by_names=True)
+        grid_object.set_centred_position(queue_model_objects.\
+            CentredPosition(motor_pos))
+
+        motor_pos_corner = []
+        for index, corner_coord in enumerate(grid_object.get_corner_coord()):
+            motor_pos_corner.append(self.diffractometer_hwobj.\
+                 get_centred_point_from_coord(corner_coord.x(),
+                                              corner_coord.y(),
+                                              return_by_names=True))
+        grid_object.set_motor_pos_corner(motor_pos_corner)
 
     def refresh_camera(self):
         """To be deleted

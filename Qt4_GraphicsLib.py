@@ -383,7 +383,6 @@ class GraphicsItemGrid(GraphicsItem):
 
         self.setFlags(QtGui.QGraphicsItem.ItemIsSelectable)  
 
-        self.__diffractometer_hwobj = parent.diffractometer_hwobj
         self.pixels_per_mm = pixels_per_mm
         self.__beam_size_microns = [beam_info.get("size_x") * 1000, 
                                     beam_info.get("size_y") * 1000]
@@ -416,6 +415,8 @@ class GraphicsItemGrid(GraphicsItem):
         self.__reversing_rotation = True
         self.__score = None 
         self.__automatic = False
+        self.__fill_alpha = 120
+        self.__display_score = True
         
         self.update_item()
 
@@ -491,11 +492,11 @@ class GraphicsItemGrid(GraphicsItem):
                 self.__num_cols) + abs(self.grid_direction['slow'][0] * \
                 self.__num_rows)
 
+            self.update_grid_draw_parameters()
             self.__center_coord.setX(min(self.__corner_coord[0].x(),
                  self.__corner_coord[1].x()) + self.__grid_size_pix[0] / 2.0)
             self.__center_coord.setY(min(self.__corner_coord[0].y(),
                  self.__corner_coord[3].y()) + self.__grid_size_pix[1] / 2.0)
-            self.update_grid_draw_parameters()
             self.scene().update() 
 
     def update_grid_draw_parameters(self):
@@ -511,18 +512,14 @@ class GraphicsItemGrid(GraphicsItem):
              abs(self.grid_direction['slow'][1] * \
              (self.__grid_size_pix[1] - self.__cell_size_pix[1]))
 
-    def update_motor_pos_corner(self):
-        self.__motor_pos_corner = []
-        for corner_coord in self.__corner_coord:
-            #motor_pos = self.__diffractometer_hwobj.get_centred_point_from_coord(\
-            #      corner_coord[0], corner_coord[1])
-            #self.__motor_pos_corner.append(motor_pos)     
-            pass        
-
     def set_corner_coord(self, corner_coord):
         for index, coord in enumerate(corner_coord):
             self.__corner_coord[index].setX(coord[0])
             self.__corner_coord[index].setY(coord[1])
+        self.__center_coord.setX(min(self.__corner_coord[0].x(),
+             self.__corner_coord[1].x()) + self.__grid_size_pix[0] / 2.0)
+        self.__center_coord.setY(min(self.__corner_coord[0].y(),
+             self.__corner_coord[3].y()) + self.__grid_size_pix[1] / 2.0)
         self.__draw_projection = True
 
     def set_spacing(self, spacing):
@@ -536,6 +533,9 @@ class GraphicsItemGrid(GraphicsItem):
 
     def is_draw_mode(self):
         return self.__draw_mode
+
+    def set_projection_mode(self, mode):
+        self.__draw_projection = mode 
 
     def get_properties(self):
         (dx_mm, dy_mm) = self.get_grid_size_mm()
@@ -571,6 +571,9 @@ class GraphicsItemGrid(GraphicsItem):
         self.__draw_projection = True
         self.__automatic = True
 
+    def get_center_coord(self):
+        return self.__center_coord.x(), self.__center_coord.y()
+
     def get_corner_coord(self):
         return self.__corner_coord
 
@@ -580,20 +583,11 @@ class GraphicsItemGrid(GraphicsItem):
     def get_motor_pos_corner(self):
         return self.__motor_pos_corner
 
-    def fix_grid_position(self):
-        motor_pos = self.__diffractometer_hwobj.\
-             get_centred_point_from_coord(self.__center_coord.x(),
-                                          self.__center_coord.y(),
-                                          return_by_names=True)
-        self.__centred_position = queue_model_objects.CentredPosition(motor_pos)
-        for index, coord in enumerate(self.__corner_coord):
-            self.__motor_pos_corner.append(self.__diffractometer_hwobj.\
-                get_centred_point_from_coord(coord.x(),
-                                             coord.y(),
-                                             return_by_names=True))
+    def set_centred_position(self, centred_position):
+        self.__centred_position = centred_position
         self.__osc_start = self.__centred_position.phi
 
-    def get_centred_position(self):
+    def get_centred_position(self): 
         return self.__centred_position
 
     def set_score(self, score):
@@ -604,6 +598,12 @@ class GraphicsItemGrid(GraphicsItem):
 
     def set_snapshot(self, snapshot):
         self.__snapshot = snapshot
+
+    def set_fill_alpha(self, value):
+        self.__fill_alpha = value
+
+    def set_display_score(self, state):
+        self.__display_score = state
 
     def paint(self, painter, option, widget):
         self.custom_pen.setColor(QtCore.Qt.darkGray)
@@ -653,6 +653,22 @@ class GraphicsItemGrid(GraphicsItem):
                             pos_y - self.__cell_size_pix[1] / 2,
                             self.__cell_size_pix[0], 
                             self.__cell_size_pix[1])
+
+                        #If score exists overlay color may change
+                        cell_score = None
+                        if self.__display_score: 
+                            #painter.setBrush(QtGui.QColor(70, 70, 165))
+                            if self.__score is not None:
+                                cell_score = self.__score[cell_index]
+                                if self.__score.max() > 0:
+                                    cell_score = float(cell_score) / self.__score.max()
+                                    brush_color = QtGui.QColor()
+                                    brush_color.setHsv(0 + 60 * cell_score, 255, 255 * cell_score, self.__fill_alpha)
+                                    self.custom_brush.setColor(brush_color)
+                                    painter.setBrush(self.custom_brush)
+                        else:
+                            painter.setBrush(QtCore.Qt.transparent)
+
                         if self.__beam_is_rectangle:
                             painter.drawRect(pos_x - self.__beam_size_pix[0] / 2,
                                              pos_y - self.__beam_size_pix[1] / 2,
@@ -663,31 +679,15 @@ class GraphicsItemGrid(GraphicsItem):
                                                 pos_y - self.__beam_size_pix[1] / 2,
                                                 self.__beam_size_pix[0],
                                                 self.__beam_size_pix[1])
-                        #If score exists overlay color may change
-                        #if self.__score:
-                        if False:
-                            score = self.__score[cell_index - 1]
-                            painter.drawText(paint_rect, 
-                                QtCore.Qt.AlignCenter, "%0.1f" % score)
-                            if self.__score.max() > 0:
-                                score = score / self.__score.max() 
-                            if score > 0:
-                                brush_color = QtGui.QColor()
-                                brush_color.setHsv(60 - 60 * score, 255, 255 * score, 100)
-                                self.custom_brush.setColor(brush_color)
-                                painter.setBrush(self.custom_brush)
-                            else: 
-                                painter.setBrush(QtCore.Qt.transparent)     
-                        else:
-                            painter.drawText(paint_rect, QtCore.Qt.AlignCenter, \
-                                    str(cell_index + self.__first_image_num))
+                        painter.drawText(paint_rect, QtCore.Qt.AlignCenter, \
+                              str(cell_index + self.__first_image_num))
                         cell_index += 1
 
-            #Draws x in the middle of the grid
-            painter.drawLine(self.__center_coord.x() - 5, self.__center_coord.y() - 5,
-                             self.__center_coord.x() + 5, self.__center_coord.y() + 5)
-            painter.drawLine(self.__center_coord.x() + 5, self.__center_coord.y() - 5,
-                             self.__center_coord.x() - 5, self.__center_coord.y() + 5)
+        #Draws x in the middle of the grid
+        painter.drawLine(self.__center_coord.x() - 5, self.__center_coord.y() - 5,
+                         self.__center_coord.x() + 5, self.__center_coord.y() + 5)
+        painter.drawLine(self.__center_coord.x() + 5, self.__center_coord.y() - 5,
+                         self.__center_coord.x() - 5, self.__center_coord.y() + 5)
  
         grid_info = "Grid %d" % (self.index + 1)
         if self.__automatic:
@@ -712,9 +712,10 @@ class GraphicsItemGrid(GraphicsItem):
         elif move_direction == "down":
             move_delta_y = 1
         for corner_coord in self.__corner_coord:
-            corner_coord[0] += move_delta_x
-            corner_coord[1] += move_delta_y    
-        self.update_motor_pos_corner()
+            corner_coord.setX(corner_coord.x() + move_delta_x)
+            corner_coord.setY(corner_coord.y() + move_delta_y)    
+        self.__center_coord.setX(self.__center_coord.x() + move_delta_x)
+        self.__center_coord.setY(self.__center_coord.y() + move_delta_y)
         self.scene().update()
 
     def get_size_pix(self):

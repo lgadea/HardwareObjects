@@ -216,8 +216,8 @@ class EMBLMiniDiff(HardwareObject):
             logging.getLogger("HWR").error('EMBLMiniDiff: Phiy motor is not defined')
 
         if self.zoom_motor_hwobj is not None:
-            self.connect(self.zoom_motor_hwobj, 'positionChanged', self.update_pixels_per_mm)
-            self.connect(self.zoom_motor_hwobj, 'predefinedPositionChanged', self.update_pixels_per_mm)
+            self.connect(self.zoom_motor_hwobj, 'positionChanged', self.zoom_position_changed)
+            self.connect(self.zoom_motor_hwobj, 'predefinedPositionChanged', self.zoom_motor_predefined_position_changed)
             self.connect(self.zoom_motor_hwobj, 'stateChanged', self.zoom_motor_state_changed)
         else:
             logging.getLogger("HWR").error('EMBLMiniDiff: Zoom motor is not defined')
@@ -458,6 +458,10 @@ class EMBLMiniDiff(HardwareObject):
         self.current_state_dict["kappa_phi"] = state
         self.emit('stateChanged', (state, ))
 
+    def zoom_position_changed(self, value):
+        self.update_pixels_per_mm()
+        self.current_positions_dict["zoom"] = value
+
     def zoom_motor_predefined_position_changed(self, position_name, offset):
         """
         Descript. :
@@ -510,12 +514,6 @@ class EMBLMiniDiff(HardwareObject):
         Descript. :
         """
         self.current_positions_dict["focus"] = pos
-
-    def zoom_motor_moved(self, pos):
-        """
-        Descript. :
-        """
-        self.current_positions_dict["zoom"] = pos
 
     def omega_reference_add_constraint(self):
         """
@@ -589,10 +587,10 @@ class EMBLMiniDiff(HardwareObject):
         """
         Descript. :
         """
-        #self.current_positions_dict["beam_x"] = (self.beam_position[0] - \
-        #     self.zoom_centre['x'] )/self.pixels_per_mm_y
-        #self.current_positions_dict["beam_y"] = (self.beam_position[1] - \
-        #     self.zoom_centre['y'] )/self.pixels_per_mm_x
+        self.current_positions_dict["beam_x"] = (self.beam_position[0] - \
+             self.zoom_centre['x'] )/self.pixels_per_mm_y
+        self.current_positions_dict["beam_y"] = (self.beam_position[1] - \
+             self.zoom_centre['y'] )/self.pixels_per_mm_x
         return self.current_positions_dict
 
     def get_omega_position(self):

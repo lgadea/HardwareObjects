@@ -416,7 +416,7 @@ class GraphicsItemGrid(GraphicsItem):
         self.__score = None 
         self.__automatic = False
         self.__fill_alpha = 120
-        self.__display_score = True
+        self.__display_overlay = True
         
         self.update_item()
 
@@ -434,10 +434,14 @@ class GraphicsItemGrid(GraphicsItem):
   
     def get_col_row_num(self):
         return self.__num_cols, self.__num_rows
+
+    def get_grid_range_mm(self):
+        return (float(self.__cell_size_microns[0] * (self.__num_cols - 1) / 1000), \
+                float(self.__cell_size_microns[1] * (self.__num_rows - 1) / 1000))
  
     def get_grid_size_mm(self):
-        return (float(self.__cell_size_microns[0] * (self.__num_cols - 1) / 1000), \
-                float(self.__cell_size_microns[1] * (self.__num_rows - 1) / 1000)) 
+        return (float(self.__cell_size_microns[0] * self.__num_cols / 1000), \
+                float(self.__cell_size_microns[1] * self.__num_rows / 1000)) 
  
     def update_item(self):
         self.__cell_size_microns = [self.__beam_size_microns[0] + self.__spacing_microns[0] * 2,
@@ -513,6 +517,7 @@ class GraphicsItemGrid(GraphicsItem):
              (self.__grid_size_pix[1] - self.__cell_size_pix[1]))
 
     def set_corner_coord(self, corner_coord):
+        self.update_grid_draw_parameters()
         for index, coord in enumerate(corner_coord):
             self.__corner_coord[index].setX(coord[0])
             self.__corner_coord[index].setY(coord[1])
@@ -538,7 +543,7 @@ class GraphicsItemGrid(GraphicsItem):
         self.__draw_projection = mode 
 
     def get_properties(self):
-        (dx_mm, dy_mm) = self.get_grid_size_mm()
+        (dx_mm, dy_mm) = self.get_grid_range_mm()
         return {"name": "Grid %d" % (self.index + 1),
                 "direction":  self.grid_direction,
                 "reversing_rotation": self.__reversing_rotation,
@@ -602,8 +607,8 @@ class GraphicsItemGrid(GraphicsItem):
     def set_fill_alpha(self, value):
         self.__fill_alpha = value
 
-    def set_display_score(self, state):
-        self.__display_score = state
+    def set_display_overlay(self, state):
+        self.__display_overlay = state
 
     def paint(self, painter, option, widget):
         self.custom_pen.setColor(QtCore.Qt.darkGray)
@@ -656,16 +661,16 @@ class GraphicsItemGrid(GraphicsItem):
 
                         #If score exists overlay color may change
                         cell_score = None
-                        if self.__display_score: 
+                        brush_color = QtGui.QColor(70, 70, 165, self.__fill_alpha)
+                        if self.__display_overlay: 
                             #painter.setBrush(QtGui.QColor(70, 70, 165))
                             if self.__score is not None:
                                 cell_score = self.__score[cell_index]
                                 if self.__score.max() > 0:
                                     cell_score = float(cell_score) / self.__score.max()
-                                    brush_color = QtGui.QColor()
                                     brush_color.setHsv(0 + 60 * cell_score, 255, 255 * cell_score, self.__fill_alpha)
-                                    self.custom_brush.setColor(brush_color)
-                                    painter.setBrush(self.custom_brush)
+                            self.custom_brush.setColor(brush_color)
+                            painter.setBrush(self.custom_brush)
                         else:
                             painter.setBrush(QtCore.Qt.transparent)
 
@@ -772,8 +777,10 @@ class GraphicsItemGrid(GraphicsItem):
     def get_direction_parameters(self):
         start_x, start_y = self.get_coord_from_line_image(0, 0)
         end_x, end_y = self.get_coord_from_line_image(0, 2)
-        return {'start_x' : start_x, 'start_y': start_y, \
-                'end_x': end_x, 'end_y': end_y}
+        return {'start_x' : start_x, 
+                'start_y': start_y, 
+                'end_x': end_x, 
+                'end_y': end_y}
 
     def get_image_from_col_row(self, col, row):
         """
@@ -781,18 +788,13 @@ class GraphicsItemGrid(GraphicsItem):
                  image in line from col and row
                  col and row can be floats
         """
-        image = int(self.__num_images_per_line / 2.0 - \
-                    (self.grid_direction['fast'][0] * (self.__num_images_per_line / 2.0 - col) + \
-                     self.grid_direction['fast'][1] * (self.__num_images_per_line / 2.0 - row)))
-
+        image = int(self.__num_images_per_line / 2.0 + \
+                    self.grid_direction['fast'][0] * (self.__num_cols / 2.0 - col) - \
+                    self.grid_direction['fast'][1] * (self.__num_rows / 2.0 - row))
         line  = int(self.__num_lines / 2.0 + \
-                (self.grid_direction['slow'][0] * (self.__num_lines / 2.0 - col) + \
-                 self.grid_direction['slow'][1] * (self.__num_lines / 2.0 - row)))
+                 self.grid_direction['slow'][0] * (self.__num_cols / 2.0 - col) - \
+                 self.grid_direction['slow'][1] * (self.__num_rows / 2.0 - row))
 
-        #MD2
-        #image = int(row)
-        #line = int(self.__num_lines - col - 1)
-    
 
         if self.__reversing_rotation and line % 2 :
             image_serial = self.__first_image_num + \
@@ -800,6 +802,7 @@ class GraphicsItemGrid(GraphicsItem):
         else:
             image_serial = self.__first_image_num + \
                 self.__num_images_per_line * line + image
+
         return image, line, image_serial
 
     def get_col_row_from_image_serial(self, image_serial):
@@ -829,7 +832,6 @@ class GraphicsItemGrid(GraphicsItem):
         """
         Descript. : x = x(click - x_middle_of_the_plot), y== the same 
         """
-
         new_point = copy.deepcopy(self.__centred_position.as_dict())
         (hor_range, ver_range) = self.get_grid_size_mm()
         hor_range = - hor_range * (self.__num_cols / 2.0 - col) / self.__num_cols
@@ -847,11 +849,10 @@ class GraphicsItemGrid(GraphicsItem):
         """
 
         #MD2
-        omega_ref = 0.0
-        new_point['sampx'] = new_point['sampx'] + ver_range  * \
-                             math.sin(math.pi * (self.__osc_start - omega_ref) / 180.0)
+        new_point['sampx'] = new_point['sampx'] + ver_range * \
+                             math.sin(math.pi * (self.__osc_start - self.grid_direction["omega_ref"]) / 180.0)
         new_point['sampy'] = new_point['sampy'] - ver_range  * \
-                             math.cos(math.pi * (self.__osc_start - omega_ref) / 180.0)
+                             math.cos(math.pi * (self.__osc_start - self.grid_direction["omega_ref"]) / 180.0)
         new_point['phiy'] = new_point['phiy'] - hor_range
 
         if as_cpos:

@@ -177,7 +177,7 @@ class Qt4_GraphicsManager(HardwareObject):
             self.connect(self.diffractometer_hwobj, "centringStarted",
                          self.diffractometer_centring_started)
             self.connect(self.diffractometer_hwobj, "centringAccepted", 
-                         self.diffractometer_centring_accepted)
+                         self.create_centring_point)
             self.connect(self.diffractometer_hwobj, "centringSuccessful", 
                          self.diffractometer_centring_successful)
             self.connect(self.diffractometer_hwobj, "centringFailed", 
@@ -279,12 +279,12 @@ class Qt4_GraphicsManager(HardwareObject):
                             motor_positions_to_screen(motor_pos)))
                     shape.set_corner_coord(corner_coord) 
 
-                    # If diffractometer is not in centred position then
-                    # it is in projection mode                    
-                    # This could look much nicer
-                    cpos = queue_model_objects.CentredPosition(\
+                    current_cpos = queue_model_objects.CentredPosition(\
                         self.diffractometer_hwobj.get_positions()) 
-                    shape.set_projection_mode(cpos != shape.get_centred_position())
+                    grid_cpos = shape.get_centred_position()
+                    current_cpos.zoom = grid_cpos.zoom
+                    
+                    shape.set_projection_mode(current_cpos != grid_cpos)
 
             for shape in self.get_shapes():
                 shape.show()
@@ -305,7 +305,7 @@ class Qt4_GraphicsManager(HardwareObject):
         self.current_centring_method = centring_method
         self.emit("centringStarted")  
 
-    def diffractometer_centring_accepted(self, centring_state, centring_status):
+    def create_centring_point(self, centring_state, centring_status):
         """Creates a new centring position and adds it to graphics point.
 
         :param centring_state: 
@@ -498,7 +498,6 @@ class Qt4_GraphicsManager(HardwareObject):
             self.shape_dict[self.graphics_grid_draw_item.get_display_name()] = \
                  self.graphics_grid_draw_item
         elif self.in_beam_define_state:
-            print "set positon and slit size"
             self.stop_beam_define()
         elif self.in_select_items_state:
             self.graphics_select_tool_item.hide()
@@ -789,21 +788,6 @@ class Qt4_GraphicsManager(HardwareObject):
             if isinstance(shape, GraphicsLib.GraphicsItemPoint):
                 selected_points.append(shape)
         return sorted(selected_points, key = lambda x : x.index, reverse = False)
-
-    def add_new_centring_point(self, state, centring_status, beam_info):
-        """Adds new centring point to the scene
-
-        :param state: state
-        :type state: bool
-        :param centring_status: centring status with motor positions
-        :type centring_statues: dict
-        :param beam_info: information about beam mark
-        :type beam_info: dict
-        """
-
-        new_point = GraphicsLib.GraphicsItemPoint(self)
-        self.centring_points.append(new_point)
-        self.graphics_view.graphics_scene.addItem(new_point)        
 
     def get_snapshot(self, shape=None, bw=None, return_as_array=None):
         """Takes a snapshot of the scene
@@ -1263,3 +1247,6 @@ class Qt4_GraphicsManager(HardwareObject):
             self.graphics_scale_item.set_radiation_dose_info(test)
         else:
             self.graphics_scale_item.set_radiation_dose_info(None)
+
+    def create_automatic_line(self):
+        pass 

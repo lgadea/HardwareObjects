@@ -239,6 +239,7 @@ class EMBLMiniDiff(HardwareObject):
 
         self.beam_info_hwobj = self.getObjectByRole("beam_info")
         if self.beam_info_hwobj is not None:
+            self.beam_position = self.beam_info_hwobj.get_beam_position()
             self.connect(self.beam_info_hwobj, 'beamPosChanged', self.beam_position_changed)
         else:
             logging.getLogger("HWR").debug('EMBLMinidiff: Beaminfo is not defined')

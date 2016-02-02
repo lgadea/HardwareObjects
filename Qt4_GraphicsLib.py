@@ -521,11 +521,11 @@ class GraphicsItemGrid(GraphicsItem):
         for index, coord in enumerate(corner_coord):
             self.__corner_coord[index].setX(coord[0])
             self.__corner_coord[index].setY(coord[1])
-        self.__center_coord.setX(min(self.__corner_coord[0].x(),
-             self.__corner_coord[1].x()) + self.__grid_size_pix[0] / 2.0)
-        self.__center_coord.setY(min(self.__corner_coord[0].y(),
-             self.__corner_coord[3].y()) + self.__grid_size_pix[1] / 2.0)
         self.__draw_projection = True
+
+    def set_center_coord(self, center_coord):
+        self.__center_coord.setX(center_coord[0])
+        self.__center_coord.setY(center_coord[1])
 
     def set_spacing(self, spacing):
         self.__spacing_microns = spacing
@@ -697,11 +697,11 @@ class GraphicsItemGrid(GraphicsItem):
         grid_info = "Grid %d" % (self.index + 1)
         if self.__automatic:
             grid_info += " (automatic)"
-        painter.drawText(max(self.__corner_coord[0].x(), self.__corner_coord[1].x()) + 3,
-                         min(self.__corner_coord[1].y(), self.__corner_coord[2].y()) - 3,
+        painter.drawText(self.__center_coord.x() + self.__grid_size_pix[0] / 2.0 + 3,
+                         self.__center_coord.y() - self.__grid_size_pix[1] / 2.0 - 3,
                          grid_info)
-        painter.drawText(max(self.__corner_coord[0].x(), self.__corner_coord[1].x()) + 3,
-                         min(self.__corner_coord[1].y(), self.__corner_coord[2].y()) + 12,
+        painter.drawText(self.__center_coord.x() + self.__grid_size_pix[0] / 2.0 + 3,
+                         self.__center_coord.y() - self.__grid_size_pix[1] / 2.0 + 12,
                          "%d x %d" % (self.__num_lines, self.__num_images_per_line))
  
             
@@ -897,7 +897,7 @@ class GraphicsItemScale(GraphicsItem):
 
         painter.drawLine(10, self.start_coord[1] - 15,
                          10 + hor_scale_len_pix, self.start_coord[1] - 15)
-        painter.drawText(hor_scale_len_pix - 5,
+        painter.drawText(hor_scale_len_pix - 10,
                          self.start_coord[1] - 20,
                          "%d %s" % (self.__scale_len, u"\u00B5"))
         painter.drawLine(10, self.start_coord[1] - 15,

@@ -273,18 +273,21 @@ class Qt4_GraphicsManager(HardwareObject):
                         motor_positions_to_screen(cpos.as_dict())
                     shape.set_start_position(new_x, new_y)
                 elif isinstance(shape, GraphicsLib.GraphicsItemGrid):
-                    corner_coord = []
-                    for motor_pos in shape.get_motor_pos_corner():
-                        corner_coord.append((self.diffractometer_hwobj.\
-                            motor_positions_to_screen(motor_pos)))
-                    shape.set_corner_coord(corner_coord) 
-
-                    current_cpos = queue_model_objects.CentredPosition(\
-                        self.diffractometer_hwobj.get_positions()) 
                     grid_cpos = shape.get_centred_position()
-                    current_cpos.zoom = grid_cpos.zoom
-                    
-                    shape.set_projection_mode(current_cpos != grid_cpos)
+                    current_cpos = queue_model_objects.CentredPosition(\
+                        self.diffractometer_hwobj.get_positions())
+
+                    if current_cpos == grid_cpos:
+                        shape.set_center_coord((self.diffractometer_hwobj.\
+                            motor_positions_to_screen(grid_cpos.as_dict())))
+                        shape.set_projection_mode(False)
+                    else:    
+                        corner_coord = []
+                        for motor_pos in shape.get_motor_pos_corner():
+                            corner_coord.append((self.diffractometer_hwobj.\
+                                motor_positions_to_screen(motor_pos)))
+                        shape.set_corner_coord(corner_coord) 
+                        shape.set_projection_mode(True)
 
             for shape in self.get_shapes():
                 shape.show()
@@ -759,7 +762,7 @@ class Qt4_GraphicsManager(HardwareObject):
         for shape in self.get_points():
             if shape.get_centred_position() == cpos:
                 shape.setSelected(True)
-        self.graphics_view.graphics_scene.update()
+        #self.graphics_view.graphics_scene.update()
 
     def get_selected_shapes(self):
         """Returns selected shapes
@@ -799,7 +802,9 @@ class Qt4_GraphicsManager(HardwareObject):
 
         if shape:
             self.de_select_all()
-            shape.setSelected(True)
+            #shape.setSelected(True)
+            #self.select_shape_with_cpos(shape.get_centred_position())
+        self.graphics_omega_reference_item.hide() 
 
         image = QtGui.QImage(self.graphics_view.graphics_scene.sceneRect().\
             size().toSize(), QtGui.QImage.Format_ARGB32)
@@ -807,10 +812,10 @@ class Qt4_GraphicsManager(HardwareObject):
         image_painter = QtGui.QPainter(image)
         self.graphics_view.render(image_painter)
         image_painter.end()
+        self.graphics_omega_reference_item.show()
         if return_as_array:
             pass         
         else:
-           
             return image
 
     def save_snapshot(self, file_name):
@@ -1236,9 +1241,9 @@ class Qt4_GraphicsManager(HardwareObject):
     def display_grid(self, state):
         self.graphics_scale_item.set_display_grid(state) 
 
-    def take_scene_snapshots(self, filename):
+    def take_scene_snapshots(self, filename, cpos=None):
         logging.getLogger("HWR").debug("Saving scene snapshot: %s" % filename)
-        snapshot = self.get_snapshot()
+        snapshot = self.get_snapshot(cpos)
         snapshot.save(filename)
 
     def display_radiation_damage(self, state):

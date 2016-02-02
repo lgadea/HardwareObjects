@@ -44,7 +44,7 @@ class EMBLMiniDiff(HardwareObject):
     PLATE = "Plate"
     PERMANENT = "Permanent"
 
-    AUTOMATIC_CENTRING_IMAGES = 8
+    AUTOMATIC_CENTRING_IMAGES = 6
 
     def __init__(self, *args):
         """
@@ -847,8 +847,7 @@ class EMBLMiniDiff(HardwareObject):
         """
         
         surface_score_list = []
-        self.zoom_motor_hwobj.moveToPosition("Zoom 1")
-        gevent.sleep(1)
+        self.zoom_motor_hwobj.moveToPosition("Zoom 1", wait=True)
         self.centring_hwobj.initCentringProcedure()
         for image in range(EMBLMiniDiff.AUTOMATIC_CENTRING_IMAGES):
             x, y, score = self.find_loop()
@@ -1217,7 +1216,7 @@ class EMBLMiniDiff(HardwareObject):
         return 10
 
     def move_omega_relative(self, relative_angle):
-        self.phi_motor_hwobj.syncMoveRelative(relative_angle)
+        self.phi_motor_hwobj.syncMoveRelative(relative_angle, 5)
 
     def _executeServerTask(self, method,timeout=30,*args):
         self.status = "NotReady"

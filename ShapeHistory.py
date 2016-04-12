@@ -354,7 +354,10 @@ class DrawingEvent(QubDrawingEvent):
                 self.move_to_centred_position_cb(clicked_shape.\
                                          get_centred_positions()[0])
                 break
+<<<<<<< HEAD
 
+=======
+>>>>>>> fix bug exception reached when click out centring point
         if clicked_shape is not None :
             self.move_to_centred_position_cb(clicked_shape.\
                                          get_centred_positions()[0])

@@ -225,6 +225,7 @@ class QueueManager(HardwareObject, QueueEntryContainer):
         self.emit('queue_stopped', (None,))
         self.emit('centringAllowed', (True, )) 
         self._is_stopped = True
+        self._running = False
 
     def set_pause(self, state):
         """
